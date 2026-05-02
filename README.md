@@ -17,7 +17,7 @@
 
 ## Install
 
-The crate is prepared for crates.io as `rmon-macos`. Once published:
+Install from crates.io:
 
 ```bash
 cargo install rmon-macos
