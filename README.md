@@ -17,6 +17,12 @@
 
 ## Install
 
+Install from crates.io:
+
+```bash
+cargo install rmon-macos
+```
+
 Build from source:
 
 ```bash

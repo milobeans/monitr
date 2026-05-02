@@ -1,5 +1,5 @@
 [package]
-name = "rmon"
+name = "rmon-macos"
 version = "0.1.0"
 edition = "2024"
 authors = ["Milo Evans"]
@@ -8,6 +8,10 @@ repository = "https://github.com/milobeans/rmon"
 license = "MIT"
 keywords = ["macos", "tui", "monitor", "ratatui", "processes"]
 categories = ["command-line-utilities"]
+
+[[bin]]
+name = "rmon"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.102"
