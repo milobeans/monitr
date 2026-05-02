@@ -80,7 +80,7 @@ fn render_title(frame: &mut Frame<'_>, app: &App, area: Rect) {
     };
     let line = Line::from(vec![
         Span::styled(
-            " rmon ",
+            " monitr ",
             Style::default()
                 .fg(BG)
                 .bg(GREEN)
@@ -592,7 +592,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(Clear, popup);
     let lines = vec![
         Line::from(Span::styled(
-            "rmon controls",
+            "monitr controls",
             Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),

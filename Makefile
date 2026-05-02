@@ -15,7 +15,7 @@ fmt:
 install-local:
 	cargo build --release
 	mkdir -p "$$HOME/.local/bin"
-	install -m 0755 target/release/rmon "$$HOME/.local/bin/rmon"
+	install -m 0755 target/release/monitr "$$HOME/.local/bin/monitr"
 
 run:
 	cargo run -- --interval 1000

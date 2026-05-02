@@ -1,16 +1,16 @@
 [package]
-name = "rmon-macos"
+name = "monitr"
 version = "0.1.0"
 edition = "2024"
 authors = ["Milo Evans"]
 description = "A lightweight macOS activity monitor TUI built with Rust and Ratatui"
-repository = "https://github.com/milobeans/rmon"
+repository = "https://github.com/milobeans/monitr"
 license = "MIT"
 keywords = ["macos", "tui", "monitor", "ratatui", "processes"]
 categories = ["command-line-utilities"]
 
 [[bin]]
-name = "rmon"
+name = "monitr"
 path = "src/main.rs"
 
 [dependencies]

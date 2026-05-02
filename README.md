@@ -1,6 +1,6 @@
-# rmon
+# monitr
 
-`rmon` is a lightweight macOS activity monitor for the terminal. It is built in Rust with Ratatui and focuses on a fast process table, low overhead sampling, and an Activity Monitor-style layout.
+`monitr` is a lightweight macOS activity monitor for the terminal. It is built in Rust with Ratatui and focuses on a fast process table, low overhead sampling, and an Activity Monitor-style layout.
 
 ## Features
 
@@ -20,7 +20,7 @@
 Install from crates.io:
 
 ```bash
-cargo install rmon-macos
+cargo install monitr
 ```
 
 Build from source:
@@ -38,19 +38,19 @@ make install-local
 ## Usage
 
 ```bash
-rmon
+monitr
 ```
 
 Start with a custom refresh interval:
 
 ```bash
-rmon --interval 750
+monitr --interval 750
 ```
 
 Start with a filter:
 
 ```bash
-rmon --filter codex
+monitr --filter codex
 ```
 
 ## Controls
@@ -74,7 +74,7 @@ rmon --filter codex
 
 ## Scope
 
-`rmon` is intended to be a faster, lighter terminal alternative to Activity Monitor for common process and system inspection. It does not use Apple's private Activity Monitor internals, so some values are approximations or interface-level summaries:
+`monitr` is intended to be a faster, lighter terminal alternative to Activity Monitor for common process and system inspection. It does not use Apple's private Activity Monitor internals, so some values are approximations or interface-level summaries:
 
 - Energy impact is a lightweight estimate based on CPU, memory share, I/O, and run state.
 - Network data is interface-level, not per-process.
