@@ -3,11 +3,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, anyhow};
 use sysinfo::{
     CpuRefreshKind, DiskRefreshKind, Disks, Networks, Pid, Process, ProcessRefreshKind,
     ProcessStatus, ProcessesToUpdate, Signal, System, UpdateKind, Users,
 };
+
+use crate::error::{self, Result};
 
 #[derive(Debug, Clone)]
 pub struct Snapshot {
@@ -187,11 +188,15 @@ impl Sampler {
         let process = self
             .system
             .process(pid)
-            .with_context(|| format!("process {pid} is no longer visible"))?;
+            .ok_or_else(|| error::message(format!("process {pid} is no longer visible")))?;
         match process.kill_with(signal) {
             Some(true) => Ok(()),
-            Some(false) => Err(anyhow!("failed to send {signal} to pid {pid}")),
-            None => Err(anyhow!("{signal} is not supported on this platform")),
+            Some(false) => Err(error::message(format!(
+                "failed to send {signal} to pid {pid}"
+            ))),
+            None => Err(error::message(format!(
+                "{signal} is not supported on this platform"
+            ))),
         }
     }
 

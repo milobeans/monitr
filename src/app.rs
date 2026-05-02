@@ -1,11 +1,12 @@
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::{Terminal, backend::Backend, widgets::TableState};
+use ratatui_core::{backend::Backend, terminal::Terminal};
+use ratatui_widgets::table::TableState;
 use sysinfo::Signal;
 
 use crate::{
+    error::Result,
     sampler::{ProcessRow, Sampler, Snapshot},
     ui,
 };

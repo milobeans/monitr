@@ -1,13 +1,28 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use humansize::{DECIMAL, format_size};
-
 pub fn bytes(value: u64) -> String {
-    format_size(value, DECIMAL)
+    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+    let mut value = value as f64;
+    let mut unit = 0;
+
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+
+    if unit == 0 {
+        format!("{} {}", value as u64, UNITS[unit])
+    } else if value >= 100.0 {
+        format!("{value:.0} {}", UNITS[unit])
+    } else if value >= 10.0 {
+        format!("{value:.1} {}", UNITS[unit])
+    } else {
+        format!("{value:.2} {}", UNITS[unit])
+    }
 }
 
 pub fn bytes_rate(bytes: f64) -> String {
-    format!("{}/s", format_size(bytes.max(0.0) as u64, DECIMAL))
+    format!("{}/s", self::bytes(bytes.max(0.0) as u64))
 }
 
 pub fn percent(value: f64) -> String {
@@ -77,7 +92,14 @@ pub fn truncate_middle(value: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{duration, percent, truncate_middle};
+    use super::{bytes, duration, percent, truncate_middle};
+
+    #[test]
+    fn formats_bytes() {
+        assert_eq!(bytes(42), "42 B");
+        assert_eq!(bytes(1_500), "1.50 KB");
+        assert_eq!(bytes(12_500_000), "12.5 MB");
+    }
 
     #[test]
     fn formats_duration_compactly() {

@@ -1,9 +1,17 @@
-use ratatui::{
-    Frame,
+use ratatui_core::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    terminal::Frame,
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Gauge, Paragraph, Row, Table, TableState, Tabs, Wrap},
+};
+use ratatui_widgets::{
+    block::Block,
+    borders::Borders,
+    clear::Clear,
+    gauge::Gauge,
+    paragraph::{Paragraph, Wrap},
+    table::{Cell, Row, Table, TableState},
+    tabs::Tabs,
 };
 
 use crate::{
