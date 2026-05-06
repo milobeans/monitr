@@ -11,6 +11,8 @@ use crate::{
     ui,
 };
 
+const NOTICE_TTL: Duration = Duration::from_secs(4);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Cpu,
@@ -98,7 +100,11 @@ impl Notice {
     }
 
     fn expired(&self) -> bool {
-        self.created_at.elapsed() > Duration::from_secs(4)
+        self.remaining().is_zero()
+    }
+
+    fn remaining(&self) -> Duration {
+        NOTICE_TTL.saturating_sub(self.created_at.elapsed())
     }
 }
 
@@ -174,20 +180,25 @@ impl App {
         B: Backend,
         B::Error: std::error::Error + Send + Sync + 'static,
     {
+        let mut needs_draw = true;
         while !self.should_quit {
-            terminal.draw(|frame| ui::draw(frame, self))?;
+            if self.clear_expired_notice() {
+                needs_draw = true;
+            }
+
+            if needs_draw {
+                terminal.draw(|frame| ui::draw(frame, self))?;
+                needs_draw = false;
+            }
 
             let timeout = self.next_poll_timeout();
             if event::poll(timeout)? {
-                self.handle_event(event::read()?)?;
+                needs_draw |= self.handle_event(event::read()?)?;
             }
 
             if self.last_refresh.elapsed() >= self.interval {
                 self.refresh();
-            }
-
-            if self.notice.as_ref().is_some_and(Notice::expired) {
-                self.notice = None;
+                needs_draw = true;
             }
         }
         Ok(())
@@ -212,47 +223,92 @@ impl App {
         self.interval
     }
 
-    fn handle_event(&mut self, event: Event) -> Result<()> {
+    fn handle_event(&mut self, event: Event) -> Result<bool> {
         let Event::Key(key) = event else {
-            return Ok(());
+            return Ok(false);
         };
         if key.kind != KeyEventKind::Press {
-            return Ok(());
+            return Ok(false);
         }
 
         if self.show_help {
-            return self.handle_help_key(key);
+            return Ok(self.handle_help_key(key));
         }
         if let Some(intent) = self.confirm {
             return self.handle_confirm_key(key, intent);
         }
         if self.filter_mode {
-            self.handle_filter_key(key);
-            return Ok(());
+            return Ok(self.handle_filter_key(key));
         }
 
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-            KeyCode::Char('?') => self.show_help = true,
-            KeyCode::Char('/') => self.filter_mode = true,
-            KeyCode::Char('i') | KeyCode::Enter => self.show_details = !self.show_details,
-            KeyCode::Char('r') => self.refresh(),
-            KeyCode::Char('s') => self.cycle_sort(),
+        let changed = match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.should_quit = true;
+                true
+            }
+            KeyCode::Char('?') => {
+                self.show_help = true;
+                true
+            }
+            KeyCode::Char('/') => {
+                self.filter_mode = true;
+                true
+            }
+            KeyCode::Char('i') | KeyCode::Enter => {
+                self.show_details = !self.show_details;
+                true
+            }
+            KeyCode::Char('r') => {
+                self.refresh();
+                true
+            }
+            KeyCode::Char('s') => {
+                self.cycle_sort();
+                true
+            }
             KeyCode::Char('S') => {
                 self.sort_desc = !self.sort_desc;
                 self.rebuild_view(self.selected_pid());
+                true
             }
-            KeyCode::Char('c') => self.set_sort(SortKey::Cpu, true),
-            KeyCode::Char('m') => self.set_sort(SortKey::Memory, true),
-            KeyCode::Char('e') => self.set_sort(SortKey::Energy, true),
-            KeyCode::Char('d') => self.set_sort(SortKey::DiskWrite, true),
-            KeyCode::Char('n') => self.set_sort(SortKey::Name, false),
-            KeyCode::Char('p') => self.set_sort(SortKey::Pid, false),
-            KeyCode::Char('u') => self.set_sort(SortKey::User, false),
+            KeyCode::Char('c') => {
+                self.set_sort(SortKey::Cpu, true);
+                true
+            }
+            KeyCode::Char('m') => {
+                self.set_sort(SortKey::Memory, true);
+                true
+            }
+            KeyCode::Char('e') => {
+                self.set_sort(SortKey::Energy, true);
+                true
+            }
+            KeyCode::Char('d') => {
+                self.set_sort(SortKey::DiskWrite, true);
+                true
+            }
+            KeyCode::Char('n') => {
+                self.set_sort(SortKey::Name, false);
+                true
+            }
+            KeyCode::Char('p') => {
+                self.set_sort(SortKey::Pid, false);
+                true
+            }
+            KeyCode::Char('u') => {
+                self.set_sort(SortKey::User, false);
+                true
+            }
             KeyCode::Char('t') => self.begin_kill(KillIntent::Term),
             KeyCode::Char('f') => self.begin_kill(KillIntent::Kill),
-            KeyCode::Char('+') | KeyCode::Char('=') => self.adjust_interval(false),
-            KeyCode::Char('-') => self.adjust_interval(true),
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                self.adjust_interval(false);
+                true
+            }
+            KeyCode::Char('-') => {
+                self.adjust_interval(true);
+                true
+            }
             KeyCode::Char('1') => self.set_tab(Tab::Cpu),
             KeyCode::Char('2') => self.set_tab(Tab::Memory),
             KeyCode::Char('3') => self.set_tab(Tab::Energy),
@@ -266,22 +322,22 @@ impl App {
             KeyCode::PageUp => self.select_previous(10),
             KeyCode::Home => self.select_first(),
             KeyCode::End => self.select_last(),
-            _ => {}
-        }
-        Ok(())
+            _ => false,
+        };
+        Ok(changed)
     }
 
-    fn handle_help_key(&mut self, key: KeyEvent) -> Result<()> {
+    fn handle_help_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') | KeyCode::Char('q') => {
                 self.show_help = false;
+                true
             }
-            _ => {}
+            _ => false,
         }
-        Ok(())
     }
 
-    fn handle_confirm_key(&mut self, key: KeyEvent, intent: KillIntent) -> Result<()> {
+    fn handle_confirm_key(&mut self, key: KeyEvent, intent: KillIntent) -> Result<bool> {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 if let Some(pid) = self.selected_pid() {
@@ -298,33 +354,40 @@ impl App {
                     }
                 }
                 self.confirm = None;
+                Ok(true)
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 self.confirm = None;
                 self.notice = Some(Notice::new("process signal cancelled"));
+                Ok(true)
             }
-            _ => {}
+            _ => Ok(false),
         }
-        Ok(())
     }
 
-    fn handle_filter_key(&mut self, key: KeyEvent) {
+    fn handle_filter_key(&mut self, key: KeyEvent) -> bool {
         let previous_pid = self.selected_pid();
         match key.code {
-            KeyCode::Esc | KeyCode::Enter => self.filter_mode = false,
+            KeyCode::Esc | KeyCode::Enter => {
+                self.filter_mode = false;
+                true
+            }
             KeyCode::Backspace => {
                 self.filter.pop();
                 self.rebuild_view(previous_pid);
+                true
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.filter.clear();
                 self.rebuild_view(previous_pid);
+                true
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.filter.push(c);
                 self.rebuild_view(previous_pid);
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 
@@ -388,30 +451,31 @@ impl App {
         });
     }
 
-    fn set_tab(&mut self, tab: Tab) {
+    fn set_tab(&mut self, tab: Tab) -> bool {
         if self.tab == tab {
-            return;
+            return false;
         }
         self.tab = tab;
         self.sort_key = tab.default_sort();
         self.sort_desc = self.sort_key != SortKey::Name && self.sort_key != SortKey::Pid;
         self.rebuild_view(self.selected_pid());
+        true
     }
 
-    fn next_tab(&mut self) {
+    fn next_tab(&mut self) -> bool {
         let index = Tab::ALL
             .iter()
             .position(|tab| *tab == self.tab)
             .unwrap_or(0);
-        self.set_tab(Tab::ALL[(index + 1) % Tab::ALL.len()]);
+        self.set_tab(Tab::ALL[(index + 1) % Tab::ALL.len()])
     }
 
-    fn previous_tab(&mut self) {
+    fn previous_tab(&mut self) -> bool {
         let index = Tab::ALL
             .iter()
             .position(|tab| *tab == self.tab)
             .unwrap_or(0);
-        self.set_tab(Tab::ALL[(index + Tab::ALL.len() - 1) % Tab::ALL.len()]);
+        self.set_tab(Tab::ALL[(index + Tab::ALL.len() - 1) % Tab::ALL.len()])
     }
 
     fn set_sort(&mut self, sort_key: SortKey, descending: bool) {
@@ -447,9 +511,12 @@ impl App {
         self.rebuild_view(self.selected_pid());
     }
 
-    fn begin_kill(&mut self, intent: KillIntent) {
+    fn begin_kill(&mut self, intent: KillIntent) -> bool {
         if self.selected_pid().is_some() {
             self.confirm = Some(intent);
+            true
+        } else {
+            false
         }
     }
 
@@ -464,39 +531,61 @@ impl App {
         self.notice = Some(Notice::new(format!("refresh interval: {} ms", next)));
     }
 
-    fn select_next(&mut self, amount: usize) {
+    fn select_next(&mut self, amount: usize) -> bool {
         if self.visible.is_empty() {
-            return;
+            return false;
         }
         let selected = self.table_state.selected().unwrap_or(0);
-        self.table_state
-            .select(Some((selected + amount).min(self.visible.len() - 1)));
+        let next = (selected + amount).min(self.visible.len() - 1);
+        self.table_state.select(Some(next));
+        next != selected
     }
 
-    fn select_previous(&mut self, amount: usize) {
+    fn select_previous(&mut self, amount: usize) -> bool {
         if self.visible.is_empty() {
-            return;
+            return false;
         }
         let selected = self.table_state.selected().unwrap_or(0);
-        self.table_state
-            .select(Some(selected.saturating_sub(amount)));
+        let next = selected.saturating_sub(amount);
+        self.table_state.select(Some(next));
+        next != selected
     }
 
-    fn select_first(&mut self) {
+    fn select_first(&mut self) -> bool {
         if !self.visible.is_empty() {
+            let changed = self.table_state.selected() != Some(0);
             self.table_state.select(Some(0));
+            changed
+        } else {
+            false
         }
     }
 
-    fn select_last(&mut self) {
+    fn select_last(&mut self) -> bool {
         if !self.visible.is_empty() {
-            self.table_state.select(Some(self.visible.len() - 1));
+            let last = self.visible.len() - 1;
+            let changed = self.table_state.selected() != Some(last);
+            self.table_state.select(Some(last));
+            changed
+        } else {
+            false
         }
     }
 
     fn next_poll_timeout(&self) -> Duration {
-        self.interval
-            .saturating_sub(self.last_refresh.elapsed())
-            .min(Duration::from_millis(200))
+        let refresh = self.interval.saturating_sub(self.last_refresh.elapsed());
+        self.notice
+            .as_ref()
+            .map(Notice::remaining)
+            .map_or(refresh, |notice| refresh.min(notice))
+    }
+
+    fn clear_expired_notice(&mut self) -> bool {
+        if self.notice.as_ref().is_some_and(Notice::expired) {
+            self.notice = None;
+            true
+        } else {
+            false
+        }
     }
 }

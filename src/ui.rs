@@ -596,7 +596,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
-    let popup = centered_rect(68, 62, area);
+    let popup = centered_rect(90, 88, area);
     frame.render_widget(Clear, popup);
     let lines = vec![
         Line::from(Span::styled(
@@ -604,12 +604,12 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
             Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("1-5 / Tab        switch Activity Monitor-style category"),
+        Line::from("1-5 / Tab        switch category"),
         Line::from("j/k or arrows    move process selection"),
         Line::from("Page/Home/End    jump through the process table"),
         Line::from("/                filter by name, pid, user, command, status"),
         Line::from("s / S            cycle sort key / reverse sort"),
-        Line::from("c m e d n p u    sort by CPU, memory, impact, disk, name, pid, user"),
+        Line::from("c m e d n p u    sort CPU, memory, impact, disk, name, pid, user"),
         Line::from("i or Enter       show or hide process inspector"),
         Line::from("t / f            send TERM / KILL after confirmation"),
         Line::from("+ / -            slower or faster refresh interval"),

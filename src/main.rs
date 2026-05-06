@@ -22,6 +22,7 @@ use crate::app::App;
 use crate::error::Result;
 use crate::terminal_backend::CrosstermBackend;
 
+#[derive(Debug, PartialEq, Eq)]
 struct Args {
     interval: u64,
     filter: Option<String>,
@@ -34,13 +35,25 @@ fn main() -> Result<()> {
     let interval = Duration::from_millis(args.interval.clamp(250, 10_000));
 
     let mut terminal = enter_terminal()?;
-    let result = App::new(interval, args.filter)?.run(&mut terminal);
-    restore_terminal(&mut terminal)?;
+    let result = match App::new(interval, args.filter) {
+        Ok(mut app) => app.run(&mut terminal),
+        Err(error) => Err(error),
+    };
+    let restore_result = restore_terminal(&mut terminal);
+    restore_result?;
     result
 }
 
 fn parse_args() -> Result<Option<Args>> {
-    let mut args = env::args().skip(1);
+    parse_args_from(env::args().skip(1))
+}
+
+fn parse_args_from<I, S>(args: I) -> Result<Option<Args>>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut args = args.into_iter().map(Into::into);
     let mut interval = 1000;
     let mut filter = None;
 
@@ -118,12 +131,50 @@ fn enter_terminal() -> Result<CrosstermTerminal> {
 }
 
 fn restore_terminal(terminal: &mut CrosstermTerminal) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(
+    let raw_result = disable_raw_mode();
+    let screen_result = execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
         DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
+    );
+    let cursor_result = terminal.show_cursor();
+
+    raw_result?;
+    screen_result?;
+    cursor_result?;
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Args, parse_args_from, parse_interval};
+
+    #[test]
+    fn parses_default_args() {
+        assert_eq!(
+            parse_args_from(Vec::<String>::new()).unwrap(),
+            Some(Args {
+                interval: 1000,
+                filter: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_interval_and_filter_args() {
+        assert_eq!(
+            parse_args_from(["--interval=750", "--filter", "codex"]).unwrap(),
+            Some(Args {
+                interval: 750,
+                filter: Some("codex".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_interval() {
+        let error = parse_interval("fast").unwrap_err().to_string();
+        assert!(error.contains("invalid interval"));
+    }
 }

@@ -5,7 +5,7 @@ build:
 
 check:
 	cargo fmt --check
-	cargo clippy -- -D warnings
+	cargo clippy --all-targets --all-features -- -D warnings
 	cargo test
 	cargo build --release
 
