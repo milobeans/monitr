@@ -34,12 +34,12 @@ fn main() -> Result<()> {
     };
     let interval = Duration::from_millis(args.interval.clamp(250, 10_000));
 
-    let mut terminal = enter_terminal()?;
+    let mut session = TerminalSession::enter()?;
     let result = match App::new(interval, args.filter) {
-        Ok(mut app) => app.run(&mut terminal),
+        Ok(mut app) => app.run(session.terminal_mut()),
         Err(error) => Err(error),
     };
-    let restore_result = restore_terminal(&mut terminal);
+    let restore_result = session.restore();
     restore_result?;
     result
 }
@@ -121,12 +121,58 @@ Options:
 
 type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 
+struct TerminalSession {
+    terminal: CrosstermTerminal,
+    active: bool,
+}
+
+impl TerminalSession {
+    fn enter() -> Result<Self> {
+        let terminal = enter_terminal()?;
+        Ok(Self {
+            terminal,
+            active: true,
+        })
+    }
+
+    fn terminal_mut(&mut self) -> &mut CrosstermTerminal {
+        &mut self.terminal
+    }
+
+    fn restore(&mut self) -> Result<()> {
+        restore_terminal(&mut self.terminal)?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = restore_terminal(&mut self.terminal);
+        }
+    }
+}
+
 fn enter_terminal() -> Result<CrosstermTerminal> {
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    if let Err(error) = execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture) {
+        let _ = disable_raw_mode();
+        return Err(error.into());
+    }
     let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::new(backend)?;
-    terminal.clear()?;
+    let mut terminal = match Terminal::new(backend) {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            let _ = disable_raw_mode();
+            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            return Err(error.into());
+        }
+    };
+    if let Err(error) = terminal.clear() {
+        let _ = restore_terminal(&mut terminal);
+        return Err(error.into());
+    }
     Ok(terminal)
 }
 

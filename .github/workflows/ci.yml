@@ -8,22 +8,31 @@ on:
 
 jobs:
   check:
-    name: Rust
+    name: Rust (${{ matrix.toolchain }})
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, 1.88.0]
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component clippy --component rustfmt
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.toolchain }}
 
       - name: Check
+        env:
+          RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
         run: make check
 
       - name: Package
+        if: matrix.toolchain == 'stable'
+        env:
+          RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
         run: cargo package

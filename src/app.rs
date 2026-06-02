@@ -230,6 +230,13 @@ impl App {
         if key.kind != KeyEventKind::Press {
             return Ok(false);
         }
+        if is_ctrl_c(key) {
+            self.should_quit = true;
+            self.confirm = None;
+            self.filter_mode = false;
+            self.show_help = false;
+            return Ok(true);
+        }
 
         if self.show_help {
             return Ok(self.handle_help_key(key));
@@ -587,5 +594,33 @@ impl App {
         } else {
             false
         }
+    }
+}
+
+fn is_ctrl_c(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+    use super::App;
+
+    #[test]
+    fn ctrl_c_quits_from_filter_mode() {
+        let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+        app.filter_mode = true;
+
+        assert!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+            )))
+            .unwrap()
+        );
+        assert!(app.should_quit);
+        assert!(!app.filter_mode);
     }
 }

@@ -70,7 +70,7 @@ monitr --filter codex
 | `+`, `-` | Adjust refresh interval |
 | `r` | Refresh now |
 | `?` | Help |
-| `q`, `Esc` | Quit |
+| `q`, `Esc`, `Ctrl-C` | Quit |
 
 ## Scope
 
@@ -81,6 +81,8 @@ monitr --filter codex
 - Some process details depend on macOS permissions and may show `-` for protected processes.
 
 ## Development
+
+`monitr` uses Rust 2024 and requires Rust 1.88 or newer.
 
 ```bash
 make check

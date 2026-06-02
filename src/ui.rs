@@ -614,7 +614,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("t / f            send TERM / KILL after confirmation"),
         Line::from("+ / -            slower or faster refresh interval"),
         Line::from("r                refresh immediately"),
-        Line::from("q or Esc         quit"),
+        Line::from("q, Esc, Ctrl-C  quit"),
         Line::from(""),
         Line::from("Press Esc, Enter, ?, or q to close."),
     ];
