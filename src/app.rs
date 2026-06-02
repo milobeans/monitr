@@ -535,7 +535,7 @@ impl App {
             (millis + 250).min(10_000)
         };
         self.interval = Duration::from_millis(next);
-        self.notice = Some(Notice::new(format!("refresh interval: {} ms", next)));
+        self.notice = Some(Notice::new(format!("refresh interval: {next} ms")));
     }
 
     fn select_next(&mut self, amount: usize) -> bool {
