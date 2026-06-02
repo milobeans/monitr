@@ -249,7 +249,7 @@ fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .map(|process| process_row(process, app.tab))
         .collect::<Vec<_>>();
 
-    let title = format!("{} | {} visible", app.tab.title(), app.visible.len());
+    let title = process_table_title(app);
     let table = Table::new(rows, widths)
         .header(header)
         .block(
@@ -266,6 +266,17 @@ fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         )
         .column_spacing(1);
     render_stateful_table(frame, table, area, &mut app.table_state);
+}
+
+fn process_table_title(app: &App) -> String {
+    match app.tab {
+        Tab::Disk => format!("Disk activity by process | {} visible", app.visible.len()),
+        Tab::Network => format!(
+            "Process context | {} visible | interface totals in inspector",
+            app.visible.len()
+        ),
+        _ => format!("{} | {} visible", app.tab.title(), app.visible.len()),
+    }
 }
 
 fn render_stateful_table(
@@ -516,13 +527,21 @@ fn render_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
-                .title("Inspector")
+                .title(inspector_title(app.tab))
                 .borders(Borders::ALL)
                 .style(panel_style()),
         )
         .style(Style::default().fg(TEXT))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+}
+
+fn inspector_title(tab: Tab) -> &'static str {
+    match tab {
+        Tab::Disk => "Inspector | volumes",
+        Tab::Network => "Inspector | interfaces",
+        _ => "Inspector",
+    }
 }
 
 fn append_disk_lines(lines: &mut Vec<Line<'static>>, disks: &[DiskRow]) {
@@ -585,7 +604,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let mode = if app.filter_mode {
         "filter mode: type, enter to keep, ctrl-u clear"
     } else {
-        "1-5 tabs  j/k move  / filter  s sort  S reverse  i details  t term  f kill  +/- interval  ? help  q quit"
+        "1-5 tabs  j/k move  / filter  s sort  D read  T runtime  S reverse  i details  t term  f kill  +/- interval  ? help  q quit"
     };
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(" ", Style::default().bg(PANEL)),
@@ -609,12 +628,16 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("Page/Home/End    jump through the process table"),
         Line::from("/                filter by name, pid, user, command, status"),
         Line::from("s / S            cycle sort key / reverse sort"),
-        Line::from("c m e d n p u    sort CPU, memory, impact, disk, name, pid, user"),
+        Line::from(
+            "c m e d D n p T u sort CPU, memory, impact, write, read, name, pid, runtime, user",
+        ),
         Line::from("i or Enter       show or hide process inspector"),
         Line::from("t / f            send TERM / KILL after confirmation"),
         Line::from("+ / -            slower or faster refresh interval"),
         Line::from("r                refresh immediately"),
         Line::from("q, Esc, Ctrl-C  quit"),
+        Line::from(""),
+        Line::from("Disk and Network inspector panels show system-level volumes/interfaces."),
         Line::from(""),
         Line::from("Press Esc, Enter, ?, or q to close."),
     ];

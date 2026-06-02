@@ -79,6 +79,10 @@ impl SortKey {
             Self::Runtime => "Runtime",
         }
     }
+
+    fn default_desc(self) -> bool {
+        !matches!(self, Self::Name | Self::Pid | Self::User)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -294,12 +298,20 @@ impl App {
                 self.set_sort(SortKey::DiskWrite, true);
                 true
             }
+            KeyCode::Char('D') => {
+                self.set_sort(SortKey::DiskRead, true);
+                true
+            }
             KeyCode::Char('n') => {
                 self.set_sort(SortKey::Name, false);
                 true
             }
             KeyCode::Char('p') => {
                 self.set_sort(SortKey::Pid, false);
+                true
+            }
+            KeyCode::Char('T') => {
+                self.set_sort(SortKey::Runtime, true);
                 true
             }
             KeyCode::Char('u') => {
@@ -464,7 +476,7 @@ impl App {
         }
         self.tab = tab;
         self.sort_key = tab.default_sort();
-        self.sort_desc = self.sort_key != SortKey::Name && self.sort_key != SortKey::Pid;
+        self.sort_desc = self.sort_key.default_desc();
         self.rebuild_view(self.selected_pid());
         true
     }
@@ -512,9 +524,7 @@ impl App {
             .position(|key| *key == self.sort_key)
             .unwrap_or(0);
         self.sort_key = ORDER[(index + 1) % ORDER.len()];
-        self.sort_desc = self.sort_key != SortKey::Name
-            && self.sort_key != SortKey::Pid
-            && self.sort_key != SortKey::User;
+        self.sort_desc = self.sort_key.default_desc();
         self.rebuild_view(self.selected_pid());
     }
 
@@ -606,7 +616,7 @@ fn is_ctrl_c(key: KeyEvent) -> bool {
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
-    use super::App;
+    use super::{App, SortKey, Tab};
 
     #[test]
     fn ctrl_c_quits_from_filter_mode() {
@@ -622,5 +632,43 @@ mod tests {
         );
         assert!(app.should_quit);
         assert!(!app.filter_mode);
+    }
+
+    #[test]
+    fn uppercase_sort_shortcuts_select_hidden_sort_keys() {
+        let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+
+        assert!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('D'),
+                KeyModifiers::SHIFT,
+            )))
+            .unwrap()
+        );
+        assert_eq!(app.sort_key, SortKey::DiskRead);
+        assert!(app.sort_desc);
+
+        assert!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('T'),
+                KeyModifiers::SHIFT,
+            )))
+            .unwrap()
+        );
+        assert_eq!(app.sort_key, SortKey::Runtime);
+        assert!(app.sort_desc);
+    }
+
+    #[test]
+    fn tab_switch_uses_default_sort_direction() {
+        let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+
+        assert!(app.set_tab(Tab::Memory));
+        assert_eq!(app.sort_key, SortKey::Memory);
+        assert!(app.sort_desc);
+
+        assert!(app.set_tab(Tab::Network));
+        assert_eq!(app.sort_key, SortKey::Name);
+        assert!(!app.sort_desc);
     }
 }

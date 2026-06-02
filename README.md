@@ -8,6 +8,7 @@
 - Sortable process table with fast keyboard navigation
 - Process filter by PID, name, user, command, or status
 - Inspector panel for the selected process
+- Disk and Network tabs include system-level volume/interface totals in the inspector
 - CPU, memory, virtual memory, runtime, status, user, parent PID, command, executable, and current working directory
 - Disk read/write rates and totals
 - macOS thread count for the selected process
@@ -63,7 +64,7 @@ monitr --filter codex
 | `/` | Filter processes |
 | `s` | Cycle sort key |
 | `S` | Reverse sort direction |
-| `c`, `m`, `e`, `d`, `n`, `p`, `u` | Sort by CPU, memory, energy impact, disk, name, PID, user |
+| `c`, `m`, `e`, `d`, `D`, `n`, `p`, `T`, `u` | Sort by CPU, memory, energy impact, disk write, disk read, name, PID, runtime, user |
 | `i`, `Enter` | Toggle inspector |
 | `t` | Send TERM after confirmation |
 | `f` | Send KILL after confirmation |
@@ -77,6 +78,7 @@ monitr --filter codex
 `monitr` is intended to be a faster, lighter terminal alternative to Activity Monitor for common process and system inspection. It does not use Apple's private Activity Monitor internals, so some values are approximations or interface-level summaries:
 
 - Energy impact is a lightweight estimate based on CPU, memory share, I/O, and run state.
+- Disk and Network tabs keep a process table for context, while the inspector shows system-level volumes or interfaces.
 - Network data is interface-level, not per-process.
 - Some process details depend on macOS permissions and may show `-` for protected processes.
 
