@@ -200,6 +200,23 @@ impl Sampler {
         }
     }
 
+    pub fn selected_process_details(&mut self, pid: u32) -> Option<SelectedProcessDetails> {
+        let pid = Pid::from_u32(pid);
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            false,
+            process_refresh_kind(),
+        );
+        self.system
+            .process(pid)
+            .map(|process| SelectedProcessDetails {
+                thread_count: platform::thread_count(process.pid().as_u32()),
+                open_files: process.open_files(),
+                open_files_limit: process.open_files_limit(),
+                session_id: process.session_id().map(|pid| pid.as_u32()),
+            })
+    }
+
     fn process_row(
         &self,
         process: &Process,

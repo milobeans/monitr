@@ -445,6 +445,7 @@ impl App {
             .unwrap_or(0)
             .min(self.visible.len() - 1);
         self.table_state.select(Some(selected));
+        self.hydrate_selected_details();
     }
 
     fn sort_processes(&mut self) {
@@ -555,6 +556,7 @@ impl App {
         let selected = self.table_state.selected().unwrap_or(0);
         let next = (selected + amount).min(self.visible.len() - 1);
         self.table_state.select(Some(next));
+        self.hydrate_selected_details();
         next != selected
     }
 
@@ -565,6 +567,7 @@ impl App {
         let selected = self.table_state.selected().unwrap_or(0);
         let next = selected.saturating_sub(amount);
         self.table_state.select(Some(next));
+        self.hydrate_selected_details();
         next != selected
     }
 
@@ -572,6 +575,7 @@ impl App {
         if !self.visible.is_empty() {
             let changed = self.table_state.selected() != Some(0);
             self.table_state.select(Some(0));
+            self.hydrate_selected_details();
             changed
         } else {
             false
@@ -583,10 +587,26 @@ impl App {
             let last = self.visible.len() - 1;
             let changed = self.table_state.selected() != Some(last);
             self.table_state.select(Some(last));
+            self.hydrate_selected_details();
             changed
         } else {
             false
         }
+    }
+
+    fn hydrate_selected_details(&mut self) {
+        let Some(selected) = self.table_state.selected() else {
+            return;
+        };
+        let Some(index) = self.visible.get(selected).copied() else {
+            return;
+        };
+        if self.snapshot.processes[index].selected_details.is_some() {
+            return;
+        }
+        let pid = self.snapshot.processes[index].pid;
+        self.snapshot.processes[index].selected_details =
+            self.sampler.selected_process_details(pid);
     }
 
     fn next_poll_timeout(&self) -> Duration {
@@ -670,5 +690,23 @@ mod tests {
         assert!(app.set_tab(Tab::Network));
         assert_eq!(app.sort_key, SortKey::Name);
         assert!(!app.sort_desc);
+    }
+
+    #[test]
+    fn selection_hydrates_details_without_waiting_for_refresh() {
+        let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+        if app.visible.len() < 2 {
+            return;
+        }
+
+        let second_index = app.visible[1];
+        app.snapshot.processes[second_index].selected_details = None;
+
+        assert!(app.select_next(1));
+        assert!(
+            app.selected_process()
+                .and_then(|process| process.selected_details.as_ref())
+                .is_some()
+        );
     }
 }
