@@ -62,6 +62,7 @@ monitr --filter codex
 | `j`/`k`, arrows | Move selection |
 | `PageUp`/`PageDown`, `Home`/`End` | Jump in the process table |
 | `/` | Filter processes |
+| `Ctrl-U` | Clear the active filter |
 | `s` | Cycle sort key |
 | `S` | Reverse sort direction |
 | `c`, `m`, `e`, `d`, `D`, `n`, `p`, `T`, `u` | Sort by CPU, memory, energy impact, disk write, disk read, name, PID, runtime, user |

@@ -604,7 +604,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let mode = if app.filter_mode {
         "filter mode: type, enter to keep, ctrl-u clear"
     } else {
-        "1-5 tabs  j/k move  / filter  s sort  D read  T runtime  S reverse  i details  t term  f kill  +/- interval  ? help  q quit"
+        "1-5 tabs  j/k move  / filter  ctrl-u clear  s sort  D read  T runtime  S reverse  i details  t term  f kill  +/- interval  ? help  q quit"
     };
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(" ", Style::default().bg(PANEL)),
@@ -627,6 +627,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("j/k or arrows    move process selection"),
         Line::from("Page/Home/End    jump through the process table"),
         Line::from("/                filter by name, pid, user, command, status"),
+        Line::from("Ctrl-U           clear the active filter"),
         Line::from("s / S            cycle sort key / reverse sort"),
         Line::from(
             "c m e d D n p T u sort CPU, memory, impact, write, read, name, pid, runtime, user",

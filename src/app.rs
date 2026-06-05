@@ -257,6 +257,9 @@ impl App {
                 self.should_quit = true;
                 true
             }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.clear_filter()
+            }
             KeyCode::Char('?') => {
                 self.show_help = true;
                 true
@@ -415,6 +418,16 @@ impl App {
         self.snapshot = self.sampler.sample(selected_pid);
         self.last_refresh = Instant::now();
         self.rebuild_view(selected_pid);
+    }
+
+    fn clear_filter(&mut self) -> bool {
+        if self.filter.is_empty() {
+            return false;
+        }
+        self.filter.clear();
+        self.rebuild_view(self.selected_pid());
+        self.notice = Some(Notice::new("filter cleared"));
+        true
     }
 
     fn rebuild_view(&mut self, selected_pid: Option<u32>) {
@@ -707,6 +720,29 @@ mod tests {
             app.selected_process()
                 .and_then(|process| process.selected_details.as_ref())
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn ctrl_u_clears_active_filter_outside_filter_mode() {
+        let mut app = App::new(
+            std::time::Duration::from_millis(1_000),
+            Some("codex".into()),
+        )
+        .unwrap();
+        app.filter_mode = false;
+
+        assert!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL,
+            )))
+            .unwrap()
+        );
+        assert!(app.filter.is_empty());
+        assert_eq!(
+            app.notice.as_ref().map(|notice| notice.text()),
+            Some("filter cleared")
         );
     }
 }
