@@ -48,6 +48,8 @@ Start with a custom refresh interval:
 monitr --interval 750
 ```
 
+Refresh intervals must be between `250` and `10000` milliseconds.
+
 Start with a filter:
 
 ```bash

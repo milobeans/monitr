@@ -22,6 +22,10 @@ use crate::app::App;
 use crate::error::Result;
 use crate::terminal_backend::CrosstermBackend;
 
+const DEFAULT_INTERVAL_MS: u64 = 1_000;
+const MIN_INTERVAL_MS: u64 = 250;
+const MAX_INTERVAL_MS: u64 = 10_000;
+
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     interval: u64,
@@ -32,7 +36,7 @@ fn main() -> Result<()> {
     let Some(args) = parse_args()? else {
         return Ok(());
     };
-    let interval = Duration::from_millis(args.interval.clamp(250, 10_000));
+    let interval = Duration::from_millis(args.interval);
 
     let mut session = TerminalSession::enter()?;
     let result = match App::new(interval, args.filter) {
@@ -54,7 +58,7 @@ where
     S: Into<String>,
 {
     let mut args = args.into_iter().map(Into::into);
-    let mut interval = 1000;
+    let mut interval = DEFAULT_INTERVAL_MS;
     let mut filter = None;
 
     while let Some(arg) = args.next() {
@@ -99,9 +103,15 @@ where
 }
 
 fn parse_interval(value: &str) -> Result<u64> {
-    value
-        .parse()
-        .map_err(|_| error::message(format!("invalid interval `{value}`; expected milliseconds")))
+    let interval = value.parse().map_err(|_| {
+        error::message(format!("invalid interval `{value}`; expected milliseconds"))
+    })?;
+    if !(MIN_INTERVAL_MS..=MAX_INTERVAL_MS).contains(&interval) {
+        return Err(error::message(format!(
+            "invalid interval `{value}`; expected {MIN_INTERVAL_MS}-{MAX_INTERVAL_MS} milliseconds"
+        )));
+    }
+    Ok(interval)
 }
 
 fn print_help() {
@@ -112,7 +122,7 @@ A lightweight macOS activity monitor TUI
 Usage: monitr [OPTIONS]
 
 Options:
-  -i, --interval <MS>    Refresh interval in milliseconds [default: 1000]
+  -i, --interval <MS>    Refresh interval in milliseconds ({MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}) [default: {DEFAULT_INTERVAL_MS}]
   -f, --filter <FILTER>  Start with a process filter
   -h, --help             Print help
   -V, --version          Print version"
@@ -222,5 +232,11 @@ mod tests {
     fn rejects_invalid_interval() {
         let error = parse_interval("fast").unwrap_err().to_string();
         assert!(error.contains("invalid interval"));
+    }
+
+    #[test]
+    fn rejects_out_of_range_interval() {
+        let error = parse_interval("100").unwrap_err().to_string();
+        assert!(error.contains("250-10000"));
     }
 }
