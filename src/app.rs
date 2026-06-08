@@ -216,6 +216,7 @@ pub struct App {
     pub inspector_scroll: usize,
     pub help_scroll: usize,
     pub overview_visible: bool,
+    last_header_click: Option<(SortKey, u8)>,
     sort_dirty: bool,
     interval: Duration,
     last_refresh: Instant,
@@ -250,6 +251,7 @@ impl App {
             inspector_scroll: 0,
             help_scroll: 0,
             overview_visible: true,
+            last_header_click: None,
             sort_dirty: true,
             interval,
             last_refresh: Instant::now(),
@@ -488,7 +490,7 @@ impl App {
                 let changed = match mouse.kind {
                     MouseEventKind::ScrollUp => self.select_previous(3),
                     MouseEventKind::ScrollDown => self.select_next(3),
-                    MouseEventKind::Down(_) => self.handle_mouse_click(mouse.row),
+                    MouseEventKind::Down(_) => self.handle_mouse_click(mouse.row, mouse.column),
                     _ => false,
                 };
                 Ok(changed)
@@ -606,8 +608,17 @@ impl App {
         }
     }
 
-    fn handle_mouse_click(&mut self, row: u16) -> bool {
-        if self.table_area.height == 0 || self.visible.is_empty() {
+    fn handle_mouse_click(&mut self, row: u16, column: u16) -> bool {
+        if self.table_area.height == 0 {
+            return false;
+        }
+
+        let header_row = self.table_area.y + 1;
+        if row == header_row {
+            return self.handle_header_click(column);
+        }
+
+        if self.visible.is_empty() {
             return false;
         }
         let header_offset = 2;
@@ -623,6 +634,114 @@ impl App {
             return true;
         }
         false
+    }
+
+    fn handle_header_click(&mut self, column: u16) -> bool {
+        let Some(sort_key) = self.column_to_sort_key(column) else {
+            return false;
+        };
+
+        let (last_key, click_count) = self.last_header_click.unwrap_or((sort_key, 0));
+        let click_count = if last_key == sort_key {
+            (click_count + 1) % 3
+        } else {
+            0
+        };
+        self.last_header_click = Some((sort_key, click_count));
+
+        match click_count {
+            0 => {
+                self.sort_key = sort_key;
+                self.sort_desc = true;
+                self.sort_dirty = true;
+                self.rebuild_view(self.selected_pid());
+                true
+            }
+            1 => {
+                self.sort_desc = false;
+                self.sort_dirty = true;
+                self.rebuild_view(self.selected_pid());
+                true
+            }
+            2 => {
+                self.cycle_sort();
+                self.last_header_click = None;
+                true
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn column_to_sort_key(&self, column: u16) -> Option<SortKey> {
+        let column = column as usize;
+        let table_x = self.table_area.x as usize;
+
+        if column <= table_x {
+            return None;
+        }
+        let relative_column = column - table_x - 1;
+
+        let widths = ui::column_widths(self.tab, self.table_area.width);
+        let mut position = 0;
+        for (index, width) in widths.iter().enumerate() {
+            if relative_column >= position && relative_column < position + width {
+                return self.column_index_to_sort_key(index);
+            }
+            position += width + 1;
+        }
+        None
+    }
+
+    fn column_index_to_sort_key(&self, index: usize) -> Option<SortKey> {
+        match self.tab {
+            Tab::Cpu => match index {
+                0 => Some(SortKey::Pid),
+                1 => Some(SortKey::Name),
+                2 => Some(SortKey::User),
+                3 => Some(SortKey::Cpu),
+                4 => Some(SortKey::Memory),
+                5 => Some(SortKey::Runtime),
+                _ => None,
+            },
+            Tab::Memory => match index {
+                0 => Some(SortKey::Pid),
+                1 => Some(SortKey::Name),
+                2 => Some(SortKey::User),
+                3 => Some(SortKey::Memory),
+                _ => None,
+            },
+            Tab::Energy => match index {
+                0 => Some(SortKey::Pid),
+                1 => Some(SortKey::Name),
+                2 => Some(SortKey::User),
+                3 => Some(SortKey::Energy),
+                4 => Some(SortKey::Cpu),
+                _ => None,
+            },
+            Tab::Disk => match index {
+                0 => Some(SortKey::Pid),
+                1 => Some(SortKey::Name),
+                2 => Some(SortKey::User),
+                3 => Some(SortKey::DiskRead),
+                4 => Some(SortKey::DiskWrite),
+                _ => None,
+            },
+            Tab::Network => match index {
+                0 => Some(SortKey::Pid),
+                1 => Some(SortKey::Name),
+                2 => Some(SortKey::User),
+                3 => Some(SortKey::Cpu),
+                4 => Some(SortKey::Memory),
+                _ => None,
+            },
+            Tab::Movers => match index {
+                0 => Some(SortKey::Pid),
+                1 => Some(SortKey::Name),
+                2 => Some(SortKey::User),
+                3 => Some(SortKey::Trend),
+                _ => None,
+            },
+        }
     }
 
     fn scroll_inspector(&mut self, amount: usize) -> bool {

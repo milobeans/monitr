@@ -490,6 +490,44 @@ fn table_schema(
     (headers, widths)
 }
 
+pub fn column_widths(tab: Tab, area_width: u16) -> Vec<usize> {
+    let (_, constraints) = table_schema(tab, crate::app::SortKey::Pid, true);
+    let inner_width = area_width.saturating_sub(2) as usize;
+    let spacing = constraints.len().saturating_sub(1);
+    let fixed: usize = constraints
+        .iter()
+        .filter_map(|c| match c {
+            Constraint::Length(n) => Some(*n as usize),
+            _ => None,
+        })
+        .sum();
+    let min_total: usize = constraints
+        .iter()
+        .filter_map(|c| match c {
+            Constraint::Min(n) => Some(*n as usize),
+            _ => None,
+        })
+        .sum();
+    let available = inner_width.saturating_sub(fixed + spacing);
+    let min_count = constraints
+        .iter()
+        .filter(|c| matches!(c, Constraint::Min(_)))
+        .count();
+
+    constraints
+        .iter()
+        .map(|c| match c {
+            Constraint::Length(n) => *n as usize,
+            Constraint::Min(n) => {
+                let extra = available.saturating_sub(min_total);
+                let share = if min_count > 0 { extra / min_count } else { 0 };
+                *n as usize + share
+            }
+            _ => 0,
+        })
+        .collect()
+}
+
 fn process_row(process: &ProcessRow, tab: Tab) -> Row<'static> {
     let pid = right(process.pid.to_string(), 7);
     let name = format::truncate_middle(&process.name, 64);
