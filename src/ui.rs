@@ -133,6 +133,7 @@ fn render_tabs(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .highlight_style(
             Style::default()
                 .fg(GREEN)
+                .bg(PANEL_ALT)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         );
     frame.render_widget(tabs, area);
@@ -266,7 +267,7 @@ fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .header(header)
         .block(
             Block::default()
-                .title(title)
+                .title(Line::from(format!(" {} ", title)).style(Style::default().fg(GREEN).add_modifier(Modifier::BOLD)))
                 .borders(Borders::ALL)
                 .style(panel_style()),
         )
@@ -756,16 +757,14 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         } else {
             "filter: type, Backspace edit, Enter/Esc keep, Ctrl-U clear"
         }
-    } else if area.width >= 150 {
-        "1-6/Tab views  j/k move  / filter  s/S sort  i inspector  o files  z/g stop/cont  [] nice  +/- refresh  ? help  q quit"
-    } else if area.width >= 110 {
-        "1-6 views  j/k move  / filter  s/S sort  i inspector  o files  z/g stop/cont  +/- refresh  ? help  q quit"
     } else {
-        "1-6 views  j/k move  / filter  s/S sort  i info  ? help  q quit"
+        // Grouping: Views | Move | Filter | Actions | Sort | Help | Quit
+        "1-6/Tab  |  j/k move  |  / filter  |  s/S sort  |  i inspect  |  o files  |  z/g stop/cont  |  [] nice  |  +/- refresh  |  ? help  |  q quit"
     };
+
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(" ", Style::default().bg(PANEL)),
-        Span::styled(mode, Style::default().fg(MUTED).bg(PANEL)),
+        Span::styled(mode, Style::default().fg(TEXT).bg(PANEL)),
     ]))
     .style(Style::default().bg(PANEL));
     frame.render_widget(footer, area);
