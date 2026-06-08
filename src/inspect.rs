@@ -1,4 +1,7 @@
-use std::{fmt::Write as _, process::Command};
+use std::{
+    fmt::Write as _,
+    process::{Command, Output},
+};
 
 use serde::Serialize;
 
@@ -204,10 +207,10 @@ fn lsof_files(pid: u32) -> Result<Vec<FileEntry>> {
         .args(["-nP", "-p", &pid.to_string(), "-F", "ftDn"])
         .output()?;
     if !output.status.success() && output.stdout.is_empty() {
-        return Err(error::message(format!(
-            "lsof files failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        if is_empty_lsof_result(&output) {
+            return Ok(Vec::new());
+        }
+        return Err(error::message(lsof_failure_message("files", &output)));
     }
     Ok(parse_lsof_files(&String::from_utf8_lossy(&output.stdout)))
 }
@@ -217,15 +220,33 @@ fn lsof_sockets(pid: u32) -> Result<Vec<SocketEntry>> {
         .args(["-nP", "-a", "-p", &pid.to_string(), "-i", "-F", "fPnT"])
         .output()?;
     if !output.status.success() && output.stdout.is_empty() {
-        if output.status.code() == Some(1) {
+        if is_empty_lsof_result(&output) {
             return Ok(Vec::new());
         }
-        return Err(error::message(format!(
-            "lsof sockets failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        return Err(error::message(lsof_failure_message("sockets", &output)));
     }
     Ok(parse_lsof_sockets(&String::from_utf8_lossy(&output.stdout)))
+}
+
+fn is_empty_lsof_result(output: &Output) -> bool {
+    output.status.code() == Some(1)
+}
+
+fn lsof_failure_message(kind: &str, output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        format!(
+            "lsof {kind} failed with status {}",
+            output
+                .status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "signal".to_string())
+        )
+    } else {
+        format!("lsof {kind} failed: {stderr}")
+    }
 }
 
 fn parse_lsof_files(output: &str) -> Vec<FileEntry> {
