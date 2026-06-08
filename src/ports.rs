@@ -108,23 +108,27 @@ fn parse_lsof_fields(output: &str) -> Vec<PortEntry> {
     let mut socket = SocketFields::default();
 
     for line in output.lines().filter(|line| !line.is_empty()) {
-        let (field, value) = line.split_at(1);
+        let mut chars = line.chars();
+        let Some(field) = chars.next() else {
+            continue;
+        };
+        let value = chars.as_str();
         match field {
-            "p" => {
+            'p' => {
                 flush_socket(&process, &mut socket, &mut entries);
                 process = ProcessFields {
                     pid: value.parse().ok(),
                     ..ProcessFields::default()
                 };
             }
-            "c" => process.command = value.to_string(),
-            "L" => process.user = value.to_string(),
-            "f" => {
+            'c' => process.command = value.to_string(),
+            'L' => process.user = value.to_string(),
+            'f' => {
                 flush_socket(&process, &mut socket, &mut entries);
                 socket.fd = value.to_string();
             }
-            "P" => socket.protocol = value.to_string(),
-            "n" => {
+            'P' => socket.protocol = value.to_string(),
+            'n' => {
                 let (local, remote) = value
                     .split_once("->")
                     .map(|(local, remote)| (local.to_string(), Some(remote.to_string())))
@@ -132,7 +136,7 @@ fn parse_lsof_fields(output: &str) -> Vec<PortEntry> {
                 socket.local = local;
                 socket.remote = remote;
             }
-            "T" => {
+            'T' => {
                 if let Some(state) = value.strip_prefix("ST=") {
                     socket.state = Some(state.to_string());
                 }

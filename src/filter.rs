@@ -78,14 +78,14 @@ impl TextField {
         }
     }
 
-    fn value(self, process: &ProcessRow) -> String {
+    fn value(self, process: &ProcessRow) -> &str {
         match self {
-            Self::User => process.user.to_lowercase(),
+            Self::User => &process.user_lowercase,
             // sort_name is already lowercased at sample time.
-            Self::Name => process.sort_name.clone(),
-            Self::Status => process.status.to_lowercase(),
-            Self::Command => process.command.to_lowercase(),
-            Self::Pid => process.pid.to_string(),
+            Self::Name => &process.sort_name,
+            Self::Status => &process.status_lowercase,
+            Self::Command => &process.command_lowercase,
+            Self::Pid => &process.pid_str,
         }
     }
 }
@@ -166,10 +166,14 @@ fn parse_numeric(raw: &str) -> Option<Term> {
 /// Decimal (1000-based) units match how `format::bytes` displays sizes.
 fn parse_size(raw: &str) -> Option<f64> {
     let raw = raw.trim().to_lowercase();
-    const SUFFIXES: [(&str, f64); 10] = [
+    const SUFFIXES: [(&str, f64); 14] = [
+        ("tib", 1099511627776.0),
         ("tb", 1e12),
+        ("gib", 1073741824.0),
         ("gb", 1e9),
+        ("mib", 1048576.0),
         ("mb", 1e6),
+        ("kib", 1024.0),
         ("kb", 1e3),
         ("t", 1e12),
         ("g", 1e9),
@@ -201,16 +205,22 @@ mod tests {
 
     fn process(pid: u32, name: &str, user: &str, cpu: f32, memory: u64) -> ProcessRow {
         let status = "running";
+        let user_str = user.to_string();
+        let cmd_str = format!("/usr/bin/{name}");
         ProcessRow {
             pid,
+            pid_str: pid.to_string(),
             parent_pid: None,
             name: name.to_string(),
             sort_name: name.to_lowercase(),
-            user: user.to_string(),
-            command: format!("/usr/bin/{name}"),
+            user: user_str.clone(),
+            user_lowercase: user_str.to_lowercase(),
+            command: cmd_str.clone(),
+            command_lowercase: cmd_str.to_lowercase(),
             exe: "-".into(),
             cwd: "-".into(),
             status: status.into(),
+            status_lowercase: status.to_lowercase(),
             cpu_usage: cpu,
             memory,
             virtual_memory: memory,

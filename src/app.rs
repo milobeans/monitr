@@ -3,12 +3,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+};
 use ratatui_core::{backend::Backend, terminal::Terminal};
 use ratatui_widgets::table::TableState;
 use sysinfo::Signal;
 
 use crate::{
+    MAX_INTERVAL_MS, MIN_INTERVAL_MS,
     error::Result,
     filter::Filter,
     history::History,
@@ -321,135 +324,152 @@ impl App {
     }
 
     fn handle_event(&mut self, event: Event) -> Result<bool> {
-        let Event::Key(key) = event else {
-            return Ok(false);
-        };
-        if key.kind != KeyEventKind::Press {
-            return Ok(false);
-        }
-        if is_ctrl_c(key) {
-            self.should_quit = true;
-            self.confirm = None;
-            self.filter_mode = false;
-            self.show_help = false;
-            self.handles = None;
-            return Ok(true);
-        }
+        match event {
+            Event::Key(key) => {
+                if key.kind != KeyEventKind::Press {
+                    return Ok(false);
+                }
+                if is_ctrl_c(key) {
+                    self.should_quit = true;
+                    self.confirm = None;
+                    self.filter_mode = false;
+                    self.show_help = false;
+                    self.handles = None;
+                    return Ok(true);
+                }
 
-        if self.show_help {
-            return Ok(self.handle_help_key(key));
-        }
-        if self.handles.is_some() {
-            return Ok(self.handle_handles_key(key));
-        }
-        if let Some(intent) = self.confirm {
-            return self.handle_confirm_key(key, intent);
-        }
-        if self.filter_mode {
-            return Ok(self.handle_filter_key(key));
-        }
+                if self.show_help {
+                    return Ok(self.handle_help_key(key));
+                }
+                if self.handles.is_some() {
+                    return Ok(self.handle_handles_key(key));
+                }
+                if let Some(intent) = self.confirm {
+                    return self.handle_confirm_key(key, intent);
+                }
+                if self.filter_mode {
+                    return Ok(self.handle_filter_key(key));
+                }
 
-        let changed = match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => {
-                self.should_quit = true;
-                true
+                let changed = match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        self.should_quit = true;
+                        true
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.clear_filter()
+                    }
+                    KeyCode::Char('?') => {
+                        self.show_help = true;
+                        true
+                    }
+                    KeyCode::Char('/') => {
+                        self.filter_mode = true;
+                        true
+                    }
+                    KeyCode::Char('i') | KeyCode::Enter => {
+                        self.show_details = !self.show_details;
+                        true
+                    }
+                    KeyCode::Char('o') => self.toggle_handles(),
+                    KeyCode::Char('r') => {
+                        self.refresh();
+                        true
+                    }
+                    KeyCode::Char('s') => {
+                        self.cycle_sort();
+                        true
+                    }
+                    KeyCode::Char('S') => {
+                        self.sort_desc = !self.sort_desc;
+                        self.rebuild_view(self.selected_pid());
+                        true
+                    }
+                    KeyCode::Char('c') => {
+                        self.set_sort(SortKey::Cpu, true);
+                        true
+                    }
+                    KeyCode::Char('m') => {
+                        self.set_sort(SortKey::Memory, true);
+                        true
+                    }
+                    KeyCode::Char('e') => {
+                        self.set_sort(SortKey::Energy, true);
+                        true
+                    }
+                    KeyCode::Char('d') => {
+                        self.set_sort(SortKey::DiskWrite, true);
+                        true
+                    }
+                    KeyCode::Char('D') => {
+                        self.set_sort(SortKey::DiskRead, true);
+                        true
+                    }
+                    KeyCode::Char('n') => {
+                        self.set_sort(SortKey::Name, false);
+                        true
+                    }
+                    KeyCode::Char('p') => {
+                        self.set_sort(SortKey::Pid, false);
+                        true
+                    }
+                    KeyCode::Char('T') => {
+                        self.set_sort(SortKey::Runtime, true);
+                        true
+                    }
+                    KeyCode::Char('u') => {
+                        self.set_sort(SortKey::User, false);
+                        true
+                    }
+                    KeyCode::Char('t') => self.begin_action(ProcessIntent::Term),
+                    KeyCode::Char('f') => self.begin_action(ProcessIntent::Kill),
+                    KeyCode::Char('z') => self.begin_action(ProcessIntent::Stop),
+                    KeyCode::Char('g') => self.begin_action(ProcessIntent::Continue),
+                    KeyCode::Char('[') => self.begin_action(ProcessIntent::NiceLower),
+                    KeyCode::Char(']') => self.begin_action(ProcessIntent::NiceHigher),
+                    KeyCode::Char('+') | KeyCode::Char('=') => {
+                        self.adjust_interval(false);
+                        true
+                    }
+                    KeyCode::Char('-') => {
+                        self.adjust_interval(true);
+                        true
+                    }
+                    KeyCode::Char('1') => self.set_tab(Tab::Cpu),
+                    KeyCode::Char('2') => self.set_tab(Tab::Memory),
+                    KeyCode::Char('3') => self.set_tab(Tab::Energy),
+                    KeyCode::Char('4') => self.set_tab(Tab::Disk),
+                    KeyCode::Char('5') => self.set_tab(Tab::Network),
+                    KeyCode::Char('6') => self.set_tab(Tab::Movers),
+                    KeyCode::Tab => self.next_tab(),
+                    KeyCode::BackTab => self.previous_tab(),
+                    KeyCode::Down | KeyCode::Char('j') => self.select_next(1),
+                    KeyCode::Up | KeyCode::Char('k') => self.select_previous(1),
+                    KeyCode::PageDown => self.select_next(10),
+                    KeyCode::PageUp => self.select_previous(10),
+                    KeyCode::Home => self.select_first(),
+                    KeyCode::End => self.select_last(),
+                    _ => false,
+                };
+                Ok(changed)
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.clear_filter()
+            Event::Mouse(mouse) => {
+                if self.show_help
+                    || self.handles.is_some()
+                    || self.confirm.is_some()
+                    || self.filter_mode
+                {
+                    return Ok(false);
+                }
+                let changed = match mouse.kind {
+                    MouseEventKind::ScrollUp => self.select_previous(3),
+                    MouseEventKind::ScrollDown => self.select_next(3),
+                    _ => false,
+                };
+                Ok(changed)
             }
-            KeyCode::Char('?') => {
-                self.show_help = true;
-                true
-            }
-            KeyCode::Char('/') => {
-                self.filter_mode = true;
-                true
-            }
-            KeyCode::Char('i') | KeyCode::Enter => {
-                self.show_details = !self.show_details;
-                true
-            }
-            KeyCode::Char('o') => self.toggle_handles(),
-            KeyCode::Char('r') => {
-                self.refresh();
-                true
-            }
-            KeyCode::Char('s') => {
-                self.cycle_sort();
-                true
-            }
-            KeyCode::Char('S') => {
-                self.sort_desc = !self.sort_desc;
-                self.rebuild_view(self.selected_pid());
-                true
-            }
-            KeyCode::Char('c') => {
-                self.set_sort(SortKey::Cpu, true);
-                true
-            }
-            KeyCode::Char('m') => {
-                self.set_sort(SortKey::Memory, true);
-                true
-            }
-            KeyCode::Char('e') => {
-                self.set_sort(SortKey::Energy, true);
-                true
-            }
-            KeyCode::Char('d') => {
-                self.set_sort(SortKey::DiskWrite, true);
-                true
-            }
-            KeyCode::Char('D') => {
-                self.set_sort(SortKey::DiskRead, true);
-                true
-            }
-            KeyCode::Char('n') => {
-                self.set_sort(SortKey::Name, false);
-                true
-            }
-            KeyCode::Char('p') => {
-                self.set_sort(SortKey::Pid, false);
-                true
-            }
-            KeyCode::Char('T') => {
-                self.set_sort(SortKey::Runtime, true);
-                true
-            }
-            KeyCode::Char('u') => {
-                self.set_sort(SortKey::User, false);
-                true
-            }
-            KeyCode::Char('t') => self.begin_action(ProcessIntent::Term),
-            KeyCode::Char('f') => self.begin_action(ProcessIntent::Kill),
-            KeyCode::Char('z') => self.begin_action(ProcessIntent::Stop),
-            KeyCode::Char('g') => self.begin_action(ProcessIntent::Continue),
-            KeyCode::Char('[') => self.begin_action(ProcessIntent::NiceLower),
-            KeyCode::Char(']') => self.begin_action(ProcessIntent::NiceHigher),
-            KeyCode::Char('+') | KeyCode::Char('=') => {
-                self.adjust_interval(false);
-                true
-            }
-            KeyCode::Char('-') => {
-                self.adjust_interval(true);
-                true
-            }
-            KeyCode::Char('1') => self.set_tab(Tab::Cpu),
-            KeyCode::Char('2') => self.set_tab(Tab::Memory),
-            KeyCode::Char('3') => self.set_tab(Tab::Energy),
-            KeyCode::Char('4') => self.set_tab(Tab::Disk),
-            KeyCode::Char('5') => self.set_tab(Tab::Network),
-            KeyCode::Char('6') => self.set_tab(Tab::Movers),
-            KeyCode::Tab => self.next_tab(),
-            KeyCode::BackTab => self.previous_tab(),
-            KeyCode::Down | KeyCode::Char('j') => self.select_next(1),
-            KeyCode::Up | KeyCode::Char('k') => self.select_previous(1),
-            KeyCode::PageDown => self.select_next(10),
-            KeyCode::PageUp => self.select_previous(10),
-            KeyCode::Home => self.select_first(),
-            KeyCode::End => self.select_last(),
-            _ => false,
-        };
-        Ok(changed)
+            _ => Ok(false),
+        }
     }
 
     fn handle_help_key(&mut self, key: KeyEvent) -> bool {
@@ -703,9 +723,9 @@ impl App {
     fn adjust_interval(&mut self, faster: bool) {
         let millis = self.interval.as_millis() as u64;
         let next = if faster {
-            millis.saturating_sub(250).max(250)
+            millis.saturating_sub(250).max(MIN_INTERVAL_MS)
         } else {
-            (millis + 250).min(10_000)
+            (millis + 250).min(MAX_INTERVAL_MS)
         };
         self.interval = Duration::from_millis(next);
         self.notice = Some(Notice::new(format!("refresh interval: {next} ms")));
@@ -715,11 +735,12 @@ impl App {
         if self.visible.is_empty() {
             return false;
         }
-        let selected = self.table_state.selected().unwrap_or(0);
+        let previous = self.table_state.selected();
+        let selected = previous.unwrap_or(0);
         let next = (selected + amount).min(self.visible.len() - 1);
         self.table_state.select(Some(next));
         self.hydrate_selected_details();
-        next != selected
+        previous != Some(next)
     }
 
     fn select_previous(&mut self, amount: usize) -> bool {

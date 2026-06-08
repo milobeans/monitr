@@ -154,7 +154,7 @@ fn render_overview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let cpu_ratio = (snapshot.totals.cpu_usage as f64 / 100.0).clamp(0.0, 1.0);
     let cpu_spark = app.history().cpu_sparkline(spark_width(chunks[0]));
     let cpu = Gauge::default()
-        .block(metric_block_with_spark("CPU", &cpu_spark))
+        .block(metric_block_with_spark("CPU", &cpu_spark, GREEN))
         .gauge_style(Style::default().fg(usage_color(snapshot.totals.cpu_usage as f64)))
         .ratio(cpu_ratio)
         .label(format!(
@@ -171,7 +171,7 @@ fn render_overview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     };
     let memory_spark = app.history().memory_sparkline(spark_width(chunks[1]));
     let memory = Gauge::default()
-        .block(metric_block_with_spark("Memory", &memory_spark))
+        .block(metric_block_with_spark("Memory", &memory_spark, BLUE))
         .gauge_style(Style::default().fg(usage_color(memory_ratio * 100.0)))
         .ratio(memory_ratio.clamp(0.0, 1.0))
         .label(format!(
@@ -267,8 +267,12 @@ fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .header(header)
         .block(
             Block::default()
-                .title(Line::from(format!(" {} ", title)).style(Style::default().fg(GREEN).add_modifier(Modifier::BOLD)))
+                .title(
+                    Line::from(format!(" {} ", title))
+                        .style(Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+                )
                 .borders(Borders::ALL)
+                .border_style(Style::default().fg(GREEN))
                 .style(panel_style()),
         )
         .row_highlight_style(
@@ -751,58 +755,149 @@ fn append_network_lines(lines: &mut Vec<Line<'static>>, networks: &[NetworkRow])
 }
 
 fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let mode = if app.filter_mode {
-        if area.width >= 90 {
-            "filter: type to search, Backspace edits, Enter or Esc keeps focus, Ctrl-U clears"
-        } else {
-            "filter: type, Backspace edit, Enter/Esc keep, Ctrl-U clear"
-        }
+    let line = if app.filter_mode {
+        Line::from(vec![
+            Span::styled(
+                " filter: ",
+                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("type to search | ", Style::default().fg(TEXT)),
+            Span::styled(
+                "Backspace",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" edits | ", Style::default().fg(TEXT)),
+            Span::styled(
+                "Enter/Esc",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" keep focus | ", Style::default().fg(TEXT)),
+            Span::styled(
+                "Ctrl-U",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" clears", Style::default().fg(TEXT)),
+        ])
     } else {
-        // Grouping: Views | Move | Filter | Actions | Sort | Help | Quit
-        "1-6/Tab  |  j/k move  |  / filter  |  s/S sort  |  i inspect  |  o files  |  z/g stop/cont  |  [] nice  |  +/- refresh  |  ? help  |  q quit"
+        Line::from(vec![
+            Span::styled(" ", Style::default()),
+            Span::styled(
+                "1-6/Tab",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" category  ", Style::default().fg(MUTED)),
+            Span::styled(
+                "j/k",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" move  ", Style::default().fg(MUTED)),
+            Span::styled("/", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+            Span::styled(" filter  ", Style::default().fg(MUTED)),
+            Span::styled(
+                "s/S",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" sort  ", Style::default().fg(MUTED)),
+            Span::styled("i", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+            Span::styled(" inspect  ", Style::default().fg(MUTED)),
+            Span::styled("o", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+            Span::styled(" files  ", Style::default().fg(MUTED)),
+            Span::styled(
+                "z/g",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" stop/cont  ", Style::default().fg(MUTED)),
+            Span::styled(
+                "[]",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" nice  ", Style::default().fg(MUTED)),
+            Span::styled(
+                "+/-",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" refresh  ", Style::default().fg(MUTED)),
+            Span::styled("?", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+            Span::styled(" help  ", Style::default().fg(MUTED)),
+            Span::styled("q", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+            Span::styled(" quit", Style::default().fg(MUTED)),
+        ])
     };
 
-    let footer = Paragraph::new(Line::from(vec![
-        Span::styled(" ", Style::default().bg(PANEL)),
-        Span::styled(mode, Style::default().fg(TEXT).bg(PANEL)),
-    ]))
-    .style(Style::default().bg(PANEL));
+    let footer = Paragraph::new(line).style(Style::default().bg(PANEL));
     frame.render_widget(footer, area);
 }
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let popup = centered_rect(90, 88, area);
     frame.render_widget(Clear, popup);
-    let lines = vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             "monitr controls",
             Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("1-6 / Tab        switch category"),
-        Line::from("j/k or arrows    move process selection"),
-        Line::from("Page/Home/End    jump through the process table"),
-        Line::from("/                filter by name, pid, user, command, or status"),
-        Line::from("                 predicates: cpu>50  mem<100mb  user:milo  name:node"),
-        Line::from("Ctrl-U           clear the active filter anywhere"),
-        Line::from("s / S            cycle sort key / reverse sort"),
-        Line::from(
-            "c m e d D n p T u sort CPU, memory, impact, write, read, name, pid, runtime, user",
-        ),
-        Line::from("i or Enter       show or hide process inspector"),
-        Line::from("o                open files and sockets for the selected process"),
-        Line::from("t / f            send TERM / KILL after confirmation"),
-        Line::from("z / g            suspend / resume with STOP / CONT after confirmation"),
-        Line::from("[ / ]            lower / raise process priority by 5 after confirmation"),
-        Line::from("+ / -            slower / faster refresh interval"),
-        Line::from("r                refresh immediately"),
-        Line::from("q, Esc, Ctrl-C  quit"),
-        Line::from(""),
-        Line::from("Disk and Network inspector panels show system-level volumes/interfaces."),
-        Line::from("Movers shows CPU, memory, and disk-rate changes since the previous sample."),
-        Line::from(""),
-        Line::from("Press Esc, Enter, ?, or q to close."),
     ];
+
+    macro_rules! add_help_line {
+        ($key:expr, $desc:expr) => {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{:<16}", $key),
+                    Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled($desc.to_string(), Style::default().fg(TEXT)),
+            ]));
+        };
+    }
+
+    add_help_line!("1-6 / Tab", "switch category");
+    add_help_line!("j/k or arrows", "move process selection");
+    add_help_line!("Page/Home/End", "jump through the process table");
+    add_help_line!("/", "filter by name, pid, user, command, or status");
+    lines.push(Line::from(vec![
+        Span::styled(format!("{:<16}", ""), Style::default()),
+        Span::styled("predicates: ", Style::default().fg(MUTED)),
+        Span::styled(
+            "cpu>50  mem<100mb  user:milo  name:node",
+            Style::default().fg(BLUE),
+        ),
+    ]));
+    add_help_line!("Ctrl-U", "clear the active filter anywhere");
+    add_help_line!("s / S", "cycle sort key / reverse sort");
+    add_help_line!(
+        "c m e d D n p T u",
+        "sort CPU, memory, impact, write, read, name, pid, runtime, user"
+    );
+    add_help_line!("i or Enter", "show or hide process inspector");
+    add_help_line!("o", "open files and sockets for the selected process");
+    add_help_line!("t / f", "send TERM / KILL after confirmation");
+    add_help_line!(
+        "z / g",
+        "suspend / resume with STOP / CONT after confirmation"
+    );
+    add_help_line!(
+        "[ / ]",
+        "lower / raise process priority by 5 after confirmation"
+    );
+    add_help_line!("+ / -", "slower / faster refresh interval");
+    add_help_line!("r", "refresh immediately");
+    add_help_line!("q, Esc, Ctrl-C", "quit");
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Disk and Network inspector panels show system-level volumes/interfaces.",
+        Style::default().fg(TEXT),
+    )));
+    lines.push(Line::from(Span::styled(
+        "Movers shows CPU, memory, and disk-rate changes since the previous sample.",
+        Style::default().fg(TEXT),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Press Esc, Enter, ?, or q to close.",
+        Style::default().fg(MUTED),
+    )));
+
     let help = Paragraph::new(lines)
         .block(
             Block::default()
@@ -852,16 +947,38 @@ fn render_handles(frame: &mut Frame<'_>, area: Rect, view: &HandlesView) {
                 .as_deref()
                 .or(socket.state.as_deref())
                 .unwrap_or("-");
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "{:<5} {:<5} {:<28} {}",
-                    format::truncate_middle(&socket.fd, 5),
-                    socket.protocol,
-                    format::truncate_middle(&socket.local, 28),
-                    remote_or_state,
+            let proto_color = if socket.protocol.to_uppercase() == "TCP" {
+                GREEN
+            } else {
+                BLUE
+            };
+            let state_color = if remote_or_state == "LISTEN" {
+                YELLOW
+            } else if remote_or_state == "ESTABLISHED" {
+                GREEN
+            } else {
+                TEXT
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{:<6}", format::truncate_middle(&socket.fd, 5)),
+                    Style::default().fg(MUTED),
                 ),
-                Style::default().fg(TEXT),
-            )));
+                Span::styled(
+                    format!("{:<6}", socket.protocol),
+                    Style::default()
+                        .fg(proto_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<29}", format::truncate_middle(&socket.local, 28)),
+                    Style::default().fg(TEXT),
+                ),
+                Span::styled(
+                    remote_or_state.to_string(),
+                    Style::default().fg(state_color),
+                ),
+            ]));
         }
         if view.sockets.len() > per_section {
             lines.push(muted_line(&overflow_hint(
@@ -877,15 +994,26 @@ fn render_handles(frame: &mut Frame<'_>, area: Rect, view: &HandlesView) {
         lines.push(muted_line("none visible"));
     } else {
         for file in view.files.iter().take(per_section) {
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "{:<5} {:<5} {}",
-                    format::truncate_middle(&file.fd, 5),
-                    file.file_type,
-                    format::truncate_middle(&file.name, name_width),
+            let type_color = match file.file_type.as_str() {
+                "DIR" => BLUE,
+                "REG" => TEXT,
+                "PIPE" => YELLOW,
+                _ => MUTED,
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{:<6}", format::truncate_middle(&file.fd, 5)),
+                    Style::default().fg(MUTED),
                 ),
-                Style::default().fg(TEXT),
-            )));
+                Span::styled(
+                    format!("{:<6}", file.file_type),
+                    Style::default().fg(type_color),
+                ),
+                Span::styled(
+                    format::truncate_middle(&file.name, name_width),
+                    Style::default().fg(TEXT),
+                ),
+            ]));
         }
         if view.files.len() > per_section {
             lines.push(muted_line(&overflow_hint(
@@ -945,11 +1073,11 @@ fn process_style(process: &ProcessRow) -> Style {
     } else {
         TEXT
     };
-    Style::default().fg(fg).bg(BG)
+    Style::default().fg(fg).bg(PANEL)
 }
 
 fn panel_style() -> Style {
-    Style::default().fg(TEXT).bg(PANEL)
+    Style::default().fg(MUTED).bg(PANEL)
 }
 
 fn metric_block(title: &'static str) -> Block<'static> {
@@ -959,11 +1087,20 @@ fn metric_block(title: &'static str) -> Block<'static> {
         .style(panel_style())
 }
 
-fn metric_block_with_spark(title: &str, spark: &str) -> Block<'static> {
+fn metric_block_with_spark(title: &'static str, spark: &str, spark_color: Color) -> Block<'static> {
     let heading = if spark.is_empty() {
-        title.to_string()
+        Line::from(vec![Span::styled(
+            title,
+            Style::default().add_modifier(Modifier::BOLD),
+        )])
     } else {
-        format!("{title} {spark}")
+        Line::from(vec![
+            Span::styled(
+                format!("{title} "),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(spark.to_string(), Style::default().fg(spark_color)),
+        ])
     };
     Block::default()
         .title(heading)

@@ -41,14 +41,18 @@ pub struct SystemTotals {
 #[derive(Debug, Clone)]
 pub struct ProcessRow {
     pub pid: u32,
+    pub pid_str: String,
     pub parent_pid: Option<u32>,
     pub name: String,
     pub sort_name: String,
     pub user: String,
+    pub user_lowercase: String,
     pub command: String,
+    pub command_lowercase: String,
     pub exe: String,
     pub cwd: String,
     pub status: String,
+    pub status_lowercase: String,
     pub cpu_usage: f32,
     pub memory: u64,
     pub virtual_memory: u64,
@@ -344,25 +348,28 @@ impl Sampler {
         });
         let parent_pid = process.parent().map(|pid| pid.as_u32());
         let status = status_label(process.status()).to_string();
+        let user_lowercase = user.to_lowercase();
+        let command_lowercase = command.to_lowercase();
+        let status_lowercase = status.to_lowercase();
         let search_text = format!(
             "{} {} {} {} {}",
-            pid,
-            sort_name,
-            user.to_lowercase(),
-            command.to_lowercase(),
-            status.to_lowercase()
+            pid, sort_name, user_lowercase, command_lowercase, status_lowercase
         );
 
         ProcessRow {
             pid,
+            pid_str: pid.to_string(),
             parent_pid,
             name,
             sort_name,
             user,
+            user_lowercase,
             command,
+            command_lowercase,
             exe,
             cwd,
             status,
+            status_lowercase,
             cpu_usage: process.cpu_usage(),
             memory,
             virtual_memory: process.virtual_memory(),
@@ -677,14 +684,18 @@ mod tests {
     ) -> ProcessRow {
         ProcessRow {
             pid,
+            pid_str: pid.to_string(),
             parent_pid: None,
             name: format!("process-{pid}"),
             sort_name: format!("process-{pid}"),
             user: "user".to_string(),
+            user_lowercase: "user".to_string(),
             command: "command".to_string(),
+            command_lowercase: "command".to_string(),
             exe: "-".to_string(),
             cwd: "-".to_string(),
             status: "running".to_string(),
+            status_lowercase: "running".to_string(),
             cpu_usage,
             memory,
             virtual_memory: memory,

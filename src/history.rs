@@ -117,14 +117,18 @@ mod tests {
     fn process(pid: u32, cpu_usage: f32) -> ProcessRow {
         ProcessRow {
             pid,
+            pid_str: pid.to_string(),
             parent_pid: None,
             name: format!("process-{pid}"),
             sort_name: format!("process-{pid}"),
             user: "user".into(),
+            user_lowercase: "user".into(),
             command: "command".into(),
+            command_lowercase: "command".into(),
             exe: "-".into(),
             cwd: "-".into(),
             status: "running".into(),
+            status_lowercase: "running".into(),
             cpu_usage,
             memory: 0,
             virtual_memory: 0,

@@ -92,15 +92,6 @@ pub fn inspect(options: InspectOptions) -> Result<Inspection> {
     })
 }
 
-/// Fetch a process's open files and sockets via `lsof`. This spawns subprocesses
-/// and is intended for on-demand use, never the refresh loop.
-pub fn collect_handles(pid: u32) -> Result<ProcessHandles> {
-    Ok(ProcessHandles {
-        files: lsof_files(pid)?,
-        sockets: lsof_sockets(pid)?,
-    })
-}
-
 pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String> {
     if options.json {
         return Ok(serde_json::to_string_pretty(inspection)?);
@@ -202,30 +193,18 @@ impl From<&ProcessRow> for InspectProcess {
     }
 }
 
-fn lsof_files(pid: u32) -> Result<Vec<FileEntry>> {
+pub fn collect_handles(pid: u32) -> Result<ProcessHandles> {
     let output = Command::new("lsof")
-        .args(["-nP", "-p", &pid.to_string(), "-F", "ftDn"])
+        .args(["-nP", "-p", &pid.to_string(), "-F", "ftDnPnT"])
         .output()?;
     if !output.status.success() && output.stdout.is_empty() {
         if is_empty_lsof_result(&output) {
-            return Ok(Vec::new());
+            return Ok(ProcessHandles::default());
         }
-        return Err(error::message(lsof_failure_message("files", &output)));
+        return Err(error::message(lsof_failure_message("handles", &output)));
     }
-    Ok(parse_lsof_files(&String::from_utf8_lossy(&output.stdout)))
-}
-
-fn lsof_sockets(pid: u32) -> Result<Vec<SocketEntry>> {
-    let output = Command::new("lsof")
-        .args(["-nP", "-a", "-p", &pid.to_string(), "-i", "-F", "fPnT"])
-        .output()?;
-    if !output.status.success() && output.stdout.is_empty() {
-        if is_empty_lsof_result(&output) {
-            return Ok(Vec::new());
-        }
-        return Err(error::message(lsof_failure_message("sockets", &output)));
-    }
-    Ok(parse_lsof_sockets(&String::from_utf8_lossy(&output.stdout)))
+    let (files, sockets) = parse_lsof_combined(&String::from_utf8_lossy(&output.stdout));
+    Ok(ProcessHandles { files, sockets })
 }
 
 fn is_empty_lsof_result(output: &Output) -> bool {
@@ -249,38 +228,39 @@ fn lsof_failure_message(kind: &str, output: &Output) -> String {
     }
 }
 
-fn parse_lsof_files(output: &str) -> Vec<FileEntry> {
-    let mut files = Vec::new();
-    let mut current = FileFields::default();
-    for line in output.lines().filter(|line| !line.is_empty()) {
-        let (field, value) = line.split_at(1);
-        match field {
-            "f" => {
-                flush_file(&mut current, &mut files);
-                current.fd = value.to_string();
-            }
-            "t" => current.file_type = value.to_string(),
-            "D" => current.device = Some(value.to_string()),
-            "n" => current.name = value.to_string(),
-            _ => {}
-        }
-    }
-    flush_file(&mut current, &mut files);
-    files
+#[derive(Default)]
+struct DescriptorFields {
+    fd: String,
+    file_type: String,
+    device: Option<String>,
+    name: String,
+    protocol: String,
+    local: String,
+    remote: Option<String>,
+    state: Option<String>,
 }
 
-fn parse_lsof_sockets(output: &str) -> Vec<SocketEntry> {
+fn parse_lsof_combined(output: &str) -> (Vec<FileEntry>, Vec<SocketEntry>) {
+    let mut files = Vec::new();
     let mut sockets = Vec::new();
-    let mut current = SocketFields::default();
+    let mut current = DescriptorFields::default();
+
     for line in output.lines().filter(|line| !line.is_empty()) {
-        let (field, value) = line.split_at(1);
+        let mut chars = line.chars();
+        let Some(field) = chars.next() else {
+            continue;
+        };
+        let value = chars.as_str();
+
         match field {
-            "f" => {
-                flush_socket(&mut current, &mut sockets);
+            'f' => {
+                flush_descriptor(&mut current, &mut files, &mut sockets);
                 current.fd = value.to_string();
             }
-            "P" => current.protocol = value.to_string(),
-            "n" => {
+            't' => current.file_type = value.to_string(),
+            'D' => current.device = Some(value.to_string()),
+            'n' => {
+                current.name = value.to_string();
                 let (local, remote) = value
                     .split_once("->")
                     .map(|(local, remote)| (local.to_string(), Some(remote.to_string())))
@@ -288,7 +268,8 @@ fn parse_lsof_sockets(output: &str) -> Vec<SocketEntry> {
                 current.local = local;
                 current.remote = remote;
             }
-            "T" => {
+            'P' => current.protocol = value.to_string(),
+            'T' => {
                 if let Some(state) = value.strip_prefix("ST=") {
                     current.state = Some(state.to_string());
                 }
@@ -296,12 +277,33 @@ fn parse_lsof_sockets(output: &str) -> Vec<SocketEntry> {
             _ => {}
         }
     }
-    flush_socket(&mut current, &mut sockets);
-    sockets
+    flush_descriptor(&mut current, &mut files, &mut sockets);
+    (files, sockets)
 }
 
-fn flush_file(current: &mut FileFields, files: &mut Vec<FileEntry>) {
-    if !current.fd.is_empty() && !current.name.is_empty() {
+fn flush_descriptor(
+    current: &mut DescriptorFields,
+    files: &mut Vec<FileEntry>,
+    sockets: &mut Vec<SocketEntry>,
+) {
+    if current.fd.is_empty() {
+        *current = DescriptorFields::default();
+        return;
+    }
+
+    let is_socket = !current.protocol.is_empty() || current.file_type.starts_with("IPv");
+
+    if is_socket {
+        if !current.local.is_empty() {
+            sockets.push(SocketEntry {
+                fd: current.fd.clone(),
+                protocol: value_or_dash(&current.protocol),
+                local: current.local.clone(),
+                remote: current.remote.clone(),
+                state: current.state.clone(),
+            });
+        }
+    } else if !current.name.is_empty() {
         files.push(FileEntry {
             fd: current.fd.clone(),
             file_type: value_or_dash(&current.file_type),
@@ -309,20 +311,7 @@ fn flush_file(current: &mut FileFields, files: &mut Vec<FileEntry>) {
             name: current.name.clone(),
         });
     }
-    *current = FileFields::default();
-}
-
-fn flush_socket(current: &mut SocketFields, sockets: &mut Vec<SocketEntry>) {
-    if !current.fd.is_empty() && !current.local.is_empty() {
-        sockets.push(SocketEntry {
-            fd: current.fd.clone(),
-            protocol: value_or_dash(&current.protocol),
-            local: current.local.clone(),
-            remote: current.remote.clone(),
-            state: current.state.clone(),
-        });
-    }
-    *current = SocketFields::default();
+    *current = DescriptorFields::default();
 }
 
 fn value_or_dash(value: &str) -> String {
@@ -333,30 +322,13 @@ fn value_or_dash(value: &str) -> String {
     }
 }
 
-#[derive(Default)]
-struct FileFields {
-    fd: String,
-    file_type: String,
-    device: Option<String>,
-    name: String,
-}
-
-#[derive(Default)]
-struct SocketFields {
-    fd: String,
-    protocol: String,
-    local: String,
-    remote: Option<String>,
-    state: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{parse_lsof_files, parse_lsof_sockets};
+    use super::parse_lsof_combined;
 
     #[test]
-    fn parses_lsof_file_entries() {
-        let files = parse_lsof_files(
+    fn parses_lsof_combined_entries() {
+        let (files, sockets) = parse_lsof_combined(
             "\
 p34138
 fcwd
@@ -366,6 +338,15 @@ n/Users/miloevans/monitr
 f1
 tPIPE
 n->0x42f88a3c7b8a6378
+f18
+tIPv4
+PTCP
+n127.0.0.1:18789
+TST=LISTEN
+f24
+tIPv6
+PUDP
+n[::1]:5353->[ff02::fb]:5353
 ",
         );
 
@@ -375,22 +356,6 @@ n->0x42f88a3c7b8a6378
         assert_eq!(files[0].name, "/Users/miloevans/monitr");
         assert_eq!(files[1].fd, "1");
         assert_eq!(files[1].file_type, "PIPE");
-    }
-
-    #[test]
-    fn parses_lsof_socket_entries() {
-        let sockets = parse_lsof_sockets(
-            "\
-p4286
-f18
-PTCP
-n127.0.0.1:18789
-TST=LISTEN
-f24
-PUDP
-n[::1]:5353->[ff02::fb]:5353
-",
-        );
 
         assert_eq!(sockets.len(), 2);
         assert_eq!(sockets[0].protocol, "TCP");

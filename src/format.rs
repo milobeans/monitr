@@ -117,7 +117,8 @@ pub fn sparkline(values: &[f64], max: f64) -> String {
 }
 
 pub fn truncate_middle(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
+    let char_count = value.chars().count();
+    if char_count <= width {
         return value.to_string();
     }
     if width <= 3 {
@@ -127,14 +128,7 @@ pub fn truncate_middle(value: &str, width: usize) -> String {
     let left_len = (width - 1) / 2;
     let right_len = width - 1 - left_len;
     let left: String = value.chars().take(left_len).collect();
-    let right: String = value
-        .chars()
-        .rev()
-        .take(right_len)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
+    let right: String = value.chars().skip(char_count - right_len).collect();
     format!("{left}.{right}")
 }
 

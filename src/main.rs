@@ -33,8 +33,8 @@ use crate::sampler::{Sampler, apply_process_trends, collect_process_samples};
 use crate::terminal_backend::CrosstermBackend;
 
 const DEFAULT_INTERVAL_MS: u64 = 1_000;
-const MIN_INTERVAL_MS: u64 = 250;
-const MAX_INTERVAL_MS: u64 = 10_000;
+pub const MIN_INTERVAL_MS: u64 = 250;
+pub const MAX_INTERVAL_MS: u64 = 10_000;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
