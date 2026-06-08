@@ -302,7 +302,7 @@ fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .block(
             Block::default()
                 .title(
-                    Line::from(format!(" {} ", title)).style(
+                    Line::from(format!(" {title} ")).style(
                         Style::default()
                             .fg(border_color)
                             .add_modifier(Modifier::BOLD),
