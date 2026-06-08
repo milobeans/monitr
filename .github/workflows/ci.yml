@@ -85,63 +85,150 @@ jobs:
           echo "previous=${previous}" >> "${GITHUB_OUTPUT}"
           echo "changed=${changed}" >> "${GITHUB_OUTPUT}"
 
-      - name: Skip release when version is unchanged
-        if: steps.version.outputs.changed != 'true'
-        run: echo "Cargo.toml version unchanged at ${{ steps.version.outputs.current }}; skipping publish and release."
-
-      - name: Validate release state
-        if: steps.version.outputs.changed == 'true'
+      - name: Inspect release state
         id: release_state
         env:
           VERSION: ${{ steps.version.outputs.current }}
+          PREVIOUS_VERSION: ${{ steps.version.outputs.previous }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          tag="v${VERSION}"
-          tag_exists=false
-          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-            tag_exists=true
-            tag_commit="$(git rev-list -n 1 "${tag}")"
-            if [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
-              echo "::error::${tag} already points to ${tag_commit}. Bump Cargo.toml before pushing another release."
-              exit 1
-            fi
-          fi
-          published="$(python3 - <<'PY'
+          python3 - <<'PY'
+          import io
           import json
           import os
+          import subprocess
+          import sys
+          import tarfile
           import urllib.error
           import urllib.request
 
           version = os.environ["VERSION"]
-          url = f"https://crates.io/api/v1/crates/monitr/{version}"
-          request = urllib.request.Request(url, headers={"User-Agent": "monitr-release-workflow"})
+          previous_version = os.environ.get("PREVIOUS_VERSION", "")
+          github_sha = os.environ["GITHUB_SHA"]
+          repository = os.environ["GITHUB_REPOSITORY"]
+          tag = f"v{version}"
+
+          def git_output(*args: str) -> str:
+              return subprocess.check_output(["git", *args], text=True).strip()
+
+          def set_output(name: str, value: str) -> None:
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+                  fh.write(f"{name}={value}\n")
+
+          tag_exists = (
+              subprocess.run(
+                  ["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"],
+                  check=False,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+              ).returncode
+              == 0
+          )
+          tag_commit = git_output("rev-list", "-n", "1", tag) if tag_exists else ""
+
+          published = False
+          published_sha = ""
+          crate_url = f"https://crates.io/api/v1/crates/monitr/{version}/download"
+          crate_request = urllib.request.Request(
+              crate_url, headers={"User-Agent": "monitr-release-workflow"}
+          )
           try:
-            with urllib.request.urlopen(request) as response:
-              json.load(response)
+              with urllib.request.urlopen(crate_request) as response:
+                  crate_bytes = response.read()
           except urllib.error.HTTPError as exc:
-            if exc.code == 404:
-              print("false")
-            else:
-              raise
+              if exc.code != 404:
+                  raise
           else:
-            print("true")
+              published = True
+              with tarfile.open(fileobj=io.BytesIO(crate_bytes), mode="r:gz") as archive:
+                  try:
+                      with archive.extractfile(
+                          f"monitr-{version}/.cargo_vcs_info.json"
+                      ) as vcs_info_file:
+                          vcs_info = json.load(vcs_info_file)
+                  except Exception:
+                      vcs_info = {}
+              published_sha = vcs_info.get("git", {}).get("sha1", "")
+
+          release_exists = False
+          release_url = f"https://api.github.com/repos/{repository}/releases/tags/{tag}"
+          release_request = urllib.request.Request(
+              release_url,
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "User-Agent": "monitr-release-workflow",
+              },
+          )
+          try:
+              with urllib.request.urlopen(release_request):
+                  release_exists = True
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404:
+                  raise
+
+          if published and published_sha and tag_exists and tag_commit != published_sha:
+              print(
+                  f"::error::{tag} points to {tag_commit}, but crates.io {version} was "
+                  f"published from {published_sha}.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          if (
+              published
+              and published_sha
+              and published_sha != github_sha
+              and previous_version != version
+          ):
+              print(
+                  f"::error::monitr {version} is already published on crates.io from "
+                  f"{published_sha}, but this push is {github_sha}. Bump Cargo.toml "
+                  "before publishing another release.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          if not published:
+              sync_needed = True
+              publish_needed = True
+              reason = "current-version-unpublished"
+          elif published_sha == github_sha:
+              sync_needed = (not tag_exists) or (not release_exists)
+              publish_needed = False
+              reason = (
+                  "repair-github-metadata"
+                  if sync_needed
+                  else "release-already-synced"
+              )
+          else:
+              sync_needed = False
+              publish_needed = False
+              reason = "version-already-published-from-earlier-commit"
+
+          set_output("tag", tag)
+          set_output("tag_exists", str(tag_exists).lower())
+          set_output("tag_commit", tag_commit)
+          set_output("published", str(published).lower())
+          set_output("published_sha", published_sha)
+          set_output("release_exists", str(release_exists).lower())
+          set_output("sync_needed", str(sync_needed).lower())
+          set_output("publish_needed", str(publish_needed).lower())
+          set_output("reason", reason)
           PY
-          )"
-          if [ "${published}" = "true" ] && [ "${tag_exists}" != "true" ]; then
-            echo "::error::monitr ${VERSION} is already published on crates.io, but ${tag} is missing from GitHub."
-            exit 1
-          fi
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "tag_exists=${tag_exists}" >> "${GITHUB_OUTPUT}"
-          echo "published=${published}" >> "${GITHUB_OUTPUT}"
+
+      - name: Skip release when current version is already synced
+        if: steps.release_state.outputs.sync_needed != 'true'
+        run: echo "Skipping release sync for ${{ steps.version.outputs.current }} (${{ steps.release_state.outputs.reason }})."
 
       - name: Verify package
-        if: steps.version.outputs.changed == 'true'
+        if: steps.release_state.outputs.sync_needed == 'true'
         env:
           RUSTUP_TOOLCHAIN: stable
         run: cargo package --locked
 
       - name: Ensure crates.io token is configured
-        if: steps.version.outputs.changed == 'true' && steps.release_state.outputs.published != 'true'
+        if: steps.release_state.outputs.publish_needed == 'true'
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: |
@@ -151,14 +238,14 @@ jobs:
           fi
 
       - name: Publish crate
-        if: steps.version.outputs.changed == 'true' && steps.release_state.outputs.published != 'true'
+        if: steps.release_state.outputs.publish_needed == 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
           RUSTUP_TOOLCHAIN: stable
         run: cargo publish --locked
 
       - name: Create GitHub release
-        if: steps.version.outputs.changed == 'true'
+        if: steps.release_state.outputs.sync_needed == 'true' && steps.release_state.outputs.release_exists != 'true'
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true

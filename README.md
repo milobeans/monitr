@@ -165,8 +165,8 @@ This runs formatting, clippy, unit tests, and a release build.
 
 ## Releases
 
-Pushes to `main` run CI. A `main` push only publishes a new crate and creates a GitHub Release when `package.version` changes in `Cargo.toml`.
+Pushes to `main` run CI. The release job syncs the current `package.version` to crates.io and GitHub whenever that version is not fully published yet.
 
-Each release version must be new. crates.io versions are immutable, so bump `Cargo.toml` before pushing a releasable commit.
+In practice that means a fresh version bump publishes a new release, and a follow-up fix commit can still publish the same version if the earlier attempt never made it to crates.io. Once a version is already published from an earlier commit, bump `Cargo.toml` before the next releasable push.
 
 Set the repository secret `CRATES_IO_TOKEN` in GitHub before relying on the publish job.
