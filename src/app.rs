@@ -6,7 +6,7 @@ use std::{
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
 };
-use ratatui_core::{backend::Backend, terminal::Terminal};
+use ratatui_core::{backend::Backend, layout::Rect, terminal::Terminal};
 use ratatui_widgets::table::TableState;
 use sysinfo::Signal;
 
@@ -129,9 +129,6 @@ impl Notice {
     }
 }
 
-/// A snapshot of one process's open files and sockets, captured on demand for
-/// the handles overlay. Carries an optional error so permission failures show
-/// in the panel rather than disappearing.
 #[derive(Debug, Clone)]
 pub struct HandlesView {
     pub pid: u32,
@@ -215,6 +212,11 @@ pub struct App {
     pub notice: Option<Notice>,
     pub confirm: Option<ProcessIntent>,
     pub handles: Option<HandlesView>,
+    pub table_area: Rect,
+    pub inspector_scroll: usize,
+    pub help_scroll: usize,
+    pub overview_visible: bool,
+    sort_dirty: bool,
     interval: Duration,
     last_refresh: Instant,
     should_quit: bool,
@@ -244,6 +246,11 @@ impl App {
             notice: None,
             confirm: None,
             handles: None,
+            table_area: Rect::default(),
+            inspector_scroll: 0,
+            help_scroll: 0,
+            overview_visible: true,
+            sort_dirty: true,
             interval,
             last_refresh: Instant::now(),
             should_quit: false,
@@ -361,6 +368,7 @@ impl App {
                     }
                     KeyCode::Char('?') => {
                         self.show_help = true;
+                        self.help_scroll = 0;
                         true
                     }
                     KeyCode::Char('/') => {
@@ -369,9 +377,14 @@ impl App {
                     }
                     KeyCode::Char('i') | KeyCode::Enter => {
                         self.show_details = !self.show_details;
+                        self.inspector_scroll = 0;
                         true
                     }
                     KeyCode::Char('o') => self.toggle_handles(),
+                    KeyCode::Char('O') => {
+                        self.overview_visible = !self.overview_visible;
+                        true
+                    }
                     KeyCode::Char('r') => {
                         self.refresh();
                         true
@@ -382,6 +395,7 @@ impl App {
                     }
                     KeyCode::Char('S') => {
                         self.sort_desc = !self.sort_desc;
+                        self.sort_dirty = true;
                         self.rebuild_view(self.selected_pid());
                         true
                     }
@@ -443,6 +457,16 @@ impl App {
                     KeyCode::Char('6') => self.set_tab(Tab::Movers),
                     KeyCode::Tab => self.next_tab(),
                     KeyCode::BackTab => self.previous_tab(),
+                    KeyCode::Down | KeyCode::Char('j')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        self.scroll_inspector(1)
+                    }
+                    KeyCode::Up | KeyCode::Char('k')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        self.scroll_inspector_back(1)
+                    }
                     KeyCode::Down | KeyCode::Char('j') => self.select_next(1),
                     KeyCode::Up | KeyCode::Char('k') => self.select_previous(1),
                     KeyCode::PageDown => self.select_next(10),
@@ -464,6 +488,7 @@ impl App {
                 let changed = match mouse.kind {
                     MouseEventKind::ScrollUp => self.select_previous(3),
                     MouseEventKind::ScrollDown => self.select_next(3),
+                    MouseEventKind::Down(_) => self.handle_mouse_click(mouse.row),
                     _ => false,
                 };
                 Ok(changed)
@@ -476,6 +501,15 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') | KeyCode::Char('q') => {
                 self.show_help = false;
+                self.help_scroll = 0;
+                true
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.help_scroll = self.help_scroll.saturating_add(1);
+                true
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.help_scroll = self.help_scroll.saturating_sub(1);
                 true
             }
             _ => false,
@@ -492,9 +526,6 @@ impl App {
         }
     }
 
-    /// Toggle the open files/sockets overlay for the selected process. Opening
-    /// runs `lsof` once for the current selection; the result (or a permission
-    /// error) is captured so it stays stable while the panel is open.
     fn toggle_handles(&mut self) -> bool {
         if self.handles.is_some() {
             self.handles = None;
@@ -575,6 +606,40 @@ impl App {
         }
     }
 
+    fn handle_mouse_click(&mut self, row: u16) -> bool {
+        if self.table_area.height == 0 || self.visible.is_empty() {
+            return false;
+        }
+        let header_offset = 2;
+        let click_row = row as usize;
+        let table_top = self.table_area.y as usize + header_offset;
+        if click_row < table_top {
+            return false;
+        }
+        let visible_index = click_row - table_top + self.table_state.offset();
+        if visible_index < self.visible.len() {
+            self.table_state.select(Some(visible_index));
+            self.hydrate_selected_details();
+            return true;
+        }
+        false
+    }
+
+    fn scroll_inspector(&mut self, amount: usize) -> bool {
+        self.inspector_scroll = self.inspector_scroll.saturating_add(amount);
+        true
+    }
+
+    fn scroll_inspector_back(&mut self, amount: usize) -> bool {
+        let new = self.inspector_scroll.saturating_sub(amount);
+        if new != self.inspector_scroll {
+            self.inspector_scroll = new;
+            true
+        } else {
+            false
+        }
+    }
+
     fn refresh(&mut self) {
         let selected_pid = self.selected_pid();
         self.snapshot = self.sampler.sample(selected_pid);
@@ -582,6 +647,7 @@ impl App {
         self.previous_samples = collect_process_samples(&self.snapshot.processes);
         self.history.record(&self.snapshot);
         self.last_refresh = Instant::now();
+        self.sort_dirty = true;
         self.rebuild_view(selected_pid);
     }
 
@@ -596,7 +662,10 @@ impl App {
     }
 
     fn rebuild_view(&mut self, selected_pid: Option<u32>) {
-        self.sort_processes();
+        if self.sort_dirty {
+            self.sort_processes();
+            self.sort_dirty = false;
+        }
         self.refilter_view(selected_pid);
     }
 
@@ -659,6 +728,7 @@ impl App {
         self.tab = tab;
         self.sort_key = tab.default_sort();
         self.sort_desc = self.sort_key.default_desc();
+        self.sort_dirty = true;
         self.rebuild_view(self.selected_pid());
         true
     }
@@ -686,6 +756,7 @@ impl App {
             self.sort_key = sort_key;
             self.sort_desc = descending;
         }
+        self.sort_dirty = true;
         self.rebuild_view(self.selected_pid());
     }
 
@@ -708,6 +779,7 @@ impl App {
             .unwrap_or(0);
         self.sort_key = ORDER[(index + 1) % ORDER.len()];
         self.sort_desc = self.sort_key.default_desc();
+        self.sort_dirty = true;
         self.rebuild_view(self.selected_pid());
     }
 
@@ -944,7 +1016,6 @@ mod tests {
         app.handles = Some(open_handles());
         let starting_tab = app.tab;
 
-        // While the overlay is open, unrelated keys are swallowed, not acted on.
         assert!(
             !app.handle_event(Event::Key(KeyEvent::new(
                 KeyCode::Char('1'),
@@ -955,7 +1026,6 @@ mod tests {
         assert_eq!(app.tab, starting_tab);
         assert!(app.handles.is_some());
 
-        // `o` again closes it.
         assert!(
             app.handle_event(Event::Key(KeyEvent::new(
                 KeyCode::Char('o'),

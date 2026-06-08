@@ -1,62 +1,72 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 
 use crate::{format, sampler::Snapshot};
 
-/// Number of samples retained per series. At the default 1s refresh this is two
-/// minutes of history; the bound keeps memory flat regardless of session length.
 const CAPACITY: usize = 120;
 
-/// Rolling time-series of system and per-process metrics, used to render
-/// sparklines. Per-process series are pruned to live PIDs on every record so
-/// memory stays proportional to the current process count, not session age.
+#[derive(Default)]
+struct Series {
+    values: Vec<f64>,
+}
+
+impl Series {
+    fn push(&mut self, value: f64) {
+        if self.values.len() == CAPACITY {
+            self.values.remove(0);
+        }
+        self.values.push(value);
+    }
+
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn recent(&self, width: usize) -> &[f64] {
+        let start = self.values.len().saturating_sub(width);
+        &self.values[start..]
+    }
+}
+
 #[derive(Default)]
 pub struct History {
-    cpu: VecDeque<f64>,
-    memory: VecDeque<f64>,
-    process_cpu: HashMap<u32, VecDeque<f64>>,
+    cpu: Series,
+    memory: Series,
+    process_cpu: HashMap<u32, Series>,
 }
 
 impl History {
     pub fn record(&mut self, snapshot: &Snapshot) {
-        push_capped(&mut self.cpu, snapshot.totals.cpu_usage as f64);
-        push_capped(&mut self.memory, memory_percent(snapshot));
+        self.cpu.push(snapshot.totals.cpu_usage as f64);
+        self.memory.push(memory_percent(snapshot));
 
+        let mut live_pids: Vec<u32> = Vec::with_capacity(snapshot.processes.len());
         for process in &snapshot.processes {
-            push_capped(
-                self.process_cpu.entry(process.pid).or_default(),
-                process.cpu_usage as f64,
-            );
+            live_pids.push(process.pid);
+            self.process_cpu
+                .entry(process.pid)
+                .or_default()
+                .push(process.cpu_usage as f64);
         }
 
-        let live: HashSet<u32> = snapshot
-            .processes
-            .iter()
-            .map(|process| process.pid)
-            .collect();
-        self.process_cpu.retain(|pid, _| live.contains(pid));
+        self.process_cpu.retain(|pid, _| live_pids.contains(pid));
     }
 
-    /// System CPU usage sparkline on a fixed 0-100% scale.
     pub fn cpu_sparkline(&self, width: usize) -> String {
-        format::sparkline(&recent(&self.cpu, width), 100.0)
+        format::sparkline(self.cpu.recent(width), 100.0)
     }
 
-    /// System memory usage sparkline on a fixed 0-100% scale.
     pub fn memory_sparkline(&self, width: usize) -> String {
-        format::sparkline(&recent(&self.memory, width), 100.0)
+        format::sparkline(self.memory.recent(width), 100.0)
     }
 
-    /// Per-process CPU sparkline scaled against the window's own peak, so a
-    /// single process's shape reads clearly regardless of core count. Returns
-    /// `None` until at least two samples exist.
     pub fn process_cpu_sparkline(&self, pid: u32, width: usize) -> Option<String> {
         let series = self.process_cpu.get(&pid)?;
         if series.len() < 2 {
             return None;
         }
-        let values = recent(series, width);
+        let values = series.recent(width);
         let max = values.iter().copied().fold(1.0, f64::max);
-        Some(format::sparkline(&values, max))
+        Some(format::sparkline(values, max))
     }
 }
 
@@ -67,18 +77,6 @@ fn memory_percent(snapshot: &Snapshot) -> f64 {
     } else {
         0.0
     }
-}
-
-fn push_capped(series: &mut VecDeque<f64>, value: f64) {
-    if series.len() == CAPACITY {
-        series.pop_front();
-    }
-    series.push_back(value);
-}
-
-fn recent(series: &VecDeque<f64>, width: usize) -> Vec<f64> {
-    let start = series.len().saturating_sub(width);
-    series.iter().skip(start).copied().collect()
 }
 
 #[cfg(test)]
@@ -122,13 +120,10 @@ mod tests {
             name: format!("process-{pid}"),
             sort_name: format!("process-{pid}"),
             user: "user".into(),
-            user_lowercase: "user".into(),
             command: "command".into(),
-            command_lowercase: "command".into(),
             exe: "-".into(),
             cwd: "-".into(),
             status: "running".into(),
-            status_lowercase: "running".into(),
             cpu_usage,
             memory: 0,
             virtual_memory: 0,
@@ -160,13 +155,11 @@ mod tests {
     fn process_series_needs_two_samples_and_drops_dead_pids() {
         let mut history = History::default();
         history.record(&snapshot(0.0, 0, vec![process(1, 10.0)]));
-        // One sample is not enough to draw a trend.
         assert!(history.process_cpu_sparkline(1, 8).is_none());
 
         history.record(&snapshot(0.0, 0, vec![process(1, 20.0)]));
         assert!(history.process_cpu_sparkline(1, 8).is_some());
 
-        // PID 1 is gone next sample, so its series is pruned.
         history.record(&snapshot(0.0, 0, vec![process(2, 5.0)]));
         assert!(history.process_cpu_sparkline(1, 8).is_none());
     }
@@ -177,7 +170,6 @@ mod tests {
         for _ in 0..(CAPACITY + 50) {
             history.record(&snapshot(50.0, 50, vec![process(1, 50.0)]));
         }
-        // recent() can never return more than the stored capacity.
         assert_eq!(
             history.cpu_sparkline(CAPACITY + 50).chars().count(),
             CAPACITY

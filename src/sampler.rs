@@ -46,13 +46,10 @@ pub struct ProcessRow {
     pub name: String,
     pub sort_name: String,
     pub user: String,
-    pub user_lowercase: String,
     pub command: String,
-    pub command_lowercase: String,
     pub exe: String,
     pub cwd: String,
     pub status: String,
-    pub status_lowercase: String,
     pub cpu_usage: f32,
     pub memory: u64,
     pub virtual_memory: u64,
@@ -89,8 +86,6 @@ impl ProcessTrend {
         self.cpu_delta.abs() as f64 + memory_mib.min(100.0) + disk_mib.min(100.0)
     }
 
-    /// A short human explanation of why this process is a mover, naming the
-    /// single dominant driver of change. Returns `None` when nothing changed.
     pub fn headline(&self) -> Option<String> {
         if self.new_process {
             return Some("new process".to_string());
@@ -348,12 +343,13 @@ impl Sampler {
         });
         let parent_pid = process.parent().map(|pid| pid.as_u32());
         let status = status_label(process.status()).to_string();
-        let user_lowercase = user.to_lowercase();
-        let command_lowercase = command.to_lowercase();
-        let status_lowercase = status.to_lowercase();
         let search_text = format!(
             "{} {} {} {} {}",
-            pid, sort_name, user_lowercase, command_lowercase, status_lowercase
+            pid,
+            sort_name,
+            user.to_lowercase(),
+            command.to_lowercase(),
+            status.to_lowercase()
         );
 
         ProcessRow {
@@ -363,13 +359,10 @@ impl Sampler {
             name,
             sort_name,
             user,
-            user_lowercase,
             command,
-            command_lowercase,
             exe,
             cwd,
             status,
-            status_lowercase,
             cpu_usage: process.cpu_usage(),
             memory,
             virtual_memory: process.virtual_memory(),
@@ -689,13 +682,10 @@ mod tests {
             name: format!("process-{pid}"),
             sort_name: format!("process-{pid}"),
             user: "user".to_string(),
-            user_lowercase: "user".to_string(),
             command: "command".to_string(),
-            command_lowercase: "command".to_string(),
             exe: "-".to_string(),
             cwd: "-".to_string(),
             status: "running".to_string(),
-            status_lowercase: "running".to_string(),
             cpu_usage,
             memory,
             virtual_memory: memory,

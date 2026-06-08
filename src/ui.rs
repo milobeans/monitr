@@ -34,12 +34,18 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
+    let overview_height = if app.overview_visible {
+        Constraint::Length(5)
+    } else {
+        Constraint::Length(0)
+    };
+
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Length(3),
-            Constraint::Length(5),
+            overview_height,
             Constraint::Min(8),
             Constraint::Length(1),
         ])
@@ -47,12 +53,14 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
 
     render_title(frame, app, layout[0]);
     render_tabs(frame, app, layout[1]);
-    render_overview(frame, app, layout[2]);
+    if app.overview_visible {
+        render_overview(frame, app, layout[2]);
+    }
     render_main(frame, app, layout[3]);
     render_footer(frame, app, layout[4]);
 
     if app.show_help {
-        render_help(frame, area);
+        render_help(frame, area, app);
     }
     if let Some(view) = app.handles_view() {
         render_handles(frame, area, view);
@@ -121,9 +129,31 @@ fn render_title(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn render_tabs(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let snapshot = app.snapshot();
     let titles = Tab::ALL
         .iter()
-        .map(|tab| Line::from(tab.title()))
+        .map(|tab| {
+            let label = match tab {
+                Tab::Cpu => format!(
+                    "CPU ({})",
+                    format::percent(snapshot.totals.cpu_usage as f64)
+                ),
+                Tab::Memory => format!("Mem ({})", format::bytes(snapshot.totals.used_memory)),
+                Tab::Energy => "Energy".to_string(),
+                Tab::Disk => format!(
+                    "Disk (R{} W{})",
+                    format::bytes_rate(snapshot.totals.disk_read_rate),
+                    format::bytes_rate(snapshot.totals.disk_write_rate)
+                ),
+                Tab::Network => format!(
+                    "Net ({} / {})",
+                    format::bytes_rate(snapshot.totals.net_in_rate),
+                    format::bytes_rate(snapshot.totals.net_out_rate)
+                ),
+                Tab::Movers => "Movers".to_string(),
+            };
+            Line::from(label)
+        })
         .collect::<Vec<_>>();
     let selected = Tab::ALL.iter().position(|tab| *tab == app.tab).unwrap_or(0);
     let tabs = Tabs::new(titles)
@@ -245,6 +275,8 @@ fn render_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    app.table_area = area;
+
     let (headers, widths) = table_schema(app.tab, app.sort_key, app.sort_desc);
     let header = Row::new(headers.iter().cloned().map(Cell::from).collect::<Vec<_>>())
         .style(
@@ -263,16 +295,21 @@ fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .collect::<Vec<_>>();
 
     let title = process_table_title(app);
+    let no_match = app.visible_count() == 0 && !app.filter.is_empty();
+    let border_color = if no_match { RED } else { GREEN };
     let table = Table::new(rows, widths)
         .header(header)
         .block(
             Block::default()
                 .title(
-                    Line::from(format!(" {} ", title))
-                        .style(Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+                    Line::from(format!(" {} ", title)).style(
+                        Style::default()
+                            .fg(border_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 )
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(GREEN))
+                .border_style(Style::default().fg(border_color))
                 .style(panel_style()),
         )
         .row_highlight_style(
@@ -454,74 +491,123 @@ fn table_schema(
 }
 
 fn process_row(process: &ProcessRow, tab: Tab) -> Row<'static> {
-    let pid = right(process.pid.to_string());
+    let pid = right(process.pid.to_string(), 7);
     let name = format::truncate_middle(&process.name, 64);
     let user = process.user.clone();
     let status = process.status.clone();
     let disk_rate = process.disk_read_rate + process.disk_write_rate;
+
+    let cpu_cell = colored_value_cell(
+        &format::percent(process.cpu_usage as f64),
+        process.cpu_usage as f64,
+        8,
+    );
+    let memory_cell =
+        colored_value_cell(&format::bytes(process.memory), process.memory_percent, 10);
+
+    let cpu_trend = trend_arrow(process.trend.cpu_delta as f64);
+    let mem_trend = trend_arrow(process.trend.memory_delta as f64);
+
     let cells = match tab {
         Tab::Cpu => vec![
-            pid,
-            name,
-            user,
-            right(format::percent(process.cpu_usage as f64)),
-            right(format::bytes(process.memory)),
-            right(format::duration(process.run_time)),
-            status,
+            Cell::from(pid),
+            Cell::from(name),
+            Cell::from(user),
+            Cell::from(format!(
+                "{}{}",
+                right(format::percent(process.cpu_usage as f64), 7),
+                cpu_trend
+            ))
+            .style(Style::default().fg(usage_color(process.cpu_usage as f64))),
+            Cell::from(format!(
+                "{}{}",
+                right(format::bytes(process.memory), 9),
+                mem_trend
+            )),
+            Cell::from(right(format::duration(process.run_time), 9)),
+            Cell::from(status),
         ],
         Tab::Memory => vec![
-            pid,
-            name,
-            user,
-            right(format::bytes(process.memory)),
-            right(format::percent(process.memory_percent)),
-            right(format::bytes(process.virtual_memory)),
-            status,
+            Cell::from(pid),
+            Cell::from(name),
+            Cell::from(user),
+            memory_cell,
+            Cell::from(right(format::percent(process.memory_percent), 7)),
+            Cell::from(right(format::bytes(process.virtual_memory), 9)),
+            Cell::from(status),
         ],
         Tab::Energy => vec![
-            pid,
-            name,
-            user,
-            right(format::number(process.energy_impact)),
-            right(format::percent(process.cpu_usage as f64)),
-            right(format::bytes_rate(disk_rate)),
-            status,
+            Cell::from(pid),
+            Cell::from(name),
+            Cell::from(user),
+            Cell::from(right(format::number(process.energy_impact), 7)),
+            cpu_cell,
+            Cell::from(right(format::bytes_rate(disk_rate), 9)),
+            Cell::from(status),
         ],
         Tab::Disk => vec![
-            pid,
-            name,
-            user,
-            right(format::bytes_rate(process.disk_read_rate)),
-            right(format::bytes_rate(process.disk_write_rate)),
-            right(format::bytes(process.total_disk_read)),
-            right(format::bytes(process.total_disk_write)),
+            Cell::from(pid),
+            Cell::from(name),
+            Cell::from(user),
+            Cell::from(right(format::bytes_rate(process.disk_read_rate), 9)),
+            Cell::from(right(format::bytes_rate(process.disk_write_rate), 9)),
+            Cell::from(right(format::bytes(process.total_disk_read), 9)),
+            Cell::from(right(format::bytes(process.total_disk_write), 9)),
         ],
         Tab::Network => vec![
-            pid,
-            name,
-            user,
-            right(format::percent(process.cpu_usage as f64)),
-            right(format::bytes(process.memory)),
-            right(format::bytes_rate(disk_rate)),
-            status,
+            Cell::from(pid),
+            Cell::from(name),
+            Cell::from(user),
+            cpu_cell,
+            memory_cell,
+            Cell::from(right(format::bytes_rate(disk_rate), 9)),
+            Cell::from(status),
         ],
         Tab::Movers => vec![
-            pid,
-            name,
-            user,
-            right(format::signed_percent(process.trend.cpu_delta as f64)),
-            right(format::signed_bytes(process.trend.memory_delta)),
-            right(format::signed_bytes_rate(process.trend.disk_rate_delta())),
-            process.trend.headline().unwrap_or(status),
+            Cell::from(pid),
+            Cell::from(name),
+            Cell::from(user),
+            Cell::from(right(
+                format::signed_percent(process.trend.cpu_delta as f64),
+                8,
+            )),
+            Cell::from(right(format::signed_bytes(process.trend.memory_delta), 9)),
+            Cell::from(right(
+                format::signed_bytes_rate(process.trend.disk_rate_delta()),
+                10,
+            )),
+            Cell::from(process.trend.headline().unwrap_or(status)),
         ],
     };
 
-    Row::new(cells.into_iter().map(Cell::from).collect::<Vec<_>>())
-        .style(process_style(process))
-        .height(1)
+    Row::new(cells).style(process_style(process)).height(1)
 }
 
-fn render_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn colored_value_cell(text: &str, value: f64, width: usize) -> Cell<'static> {
+    let color = if value >= 80.0 {
+        RED
+    } else if value >= 50.0 {
+        YELLOW
+    } else {
+        TEXT
+    };
+    Cell::from(Span::styled(
+        right(text.to_string(), width),
+        Style::default().fg(color),
+    ))
+}
+
+fn trend_arrow(delta: f64) -> String {
+    if delta > 1.0 {
+        " ↑".to_string()
+    } else if delta < -1.0 {
+        " ↓".to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn render_details(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let selected = app.selected_process();
     let mut lines = Vec::new();
 
@@ -671,6 +757,12 @@ fn render_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
         append_network_lines(&mut lines, &app.snapshot().networks);
     }
 
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(inner_height);
+    if app.inspector_scroll > max_scroll {
+        app.inspector_scroll = max_scroll;
+    }
+
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
@@ -679,7 +771,8 @@ fn render_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .style(panel_style()),
         )
         .style(Style::default().fg(TEXT))
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((app.inspector_scroll as u16, 0));
     frame.render_widget(paragraph, area);
 }
 
@@ -779,46 +872,58 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
             Span::styled(" clears", Style::default().fg(TEXT)),
         ])
     } else {
+        let sep = Span::styled(" │ ", Style::default().fg(MUTED));
         Line::from(vec![
-            Span::styled(" ", Style::default()),
+            Span::raw(" "),
             Span::styled(
-                "1-6/Tab",
+                "1-6",
                 Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" category  ", Style::default().fg(MUTED)),
+            Span::styled(" tabs ", Style::default().fg(MUTED)),
             Span::styled(
                 "j/k",
                 Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" move  ", Style::default().fg(MUTED)),
+            Span::styled(" move", Style::default().fg(MUTED)),
+            sep.clone(),
             Span::styled("/", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
-            Span::styled(" filter  ", Style::default().fg(MUTED)),
+            Span::styled(" filter ", Style::default().fg(MUTED)),
             Span::styled(
                 "s/S",
                 Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" sort  ", Style::default().fg(MUTED)),
+            Span::styled(" sort", Style::default().fg(MUTED)),
+            sep.clone(),
             Span::styled("i", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
-            Span::styled(" inspect  ", Style::default().fg(MUTED)),
+            Span::styled(" inspect ", Style::default().fg(MUTED)),
             Span::styled("o", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
-            Span::styled(" files  ", Style::default().fg(MUTED)),
+            Span::styled(" files ", Style::default().fg(MUTED)),
+            Span::styled("O", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+            Span::styled(" overview", Style::default().fg(MUTED)),
+            sep.clone(),
+            Span::styled(
+                "t/f",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" term/kill ", Style::default().fg(MUTED)),
             Span::styled(
                 "z/g",
                 Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" stop/cont  ", Style::default().fg(MUTED)),
+            Span::styled(" stop/cont ", Style::default().fg(MUTED)),
             Span::styled(
                 "[]",
                 Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" nice  ", Style::default().fg(MUTED)),
+            Span::styled(" nice", Style::default().fg(MUTED)),
+            sep.clone(),
             Span::styled(
                 "+/-",
                 Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" refresh  ", Style::default().fg(MUTED)),
+            Span::styled(" refresh ", Style::default().fg(MUTED)),
             Span::styled("?", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
-            Span::styled(" help  ", Style::default().fg(MUTED)),
+            Span::styled(" help ", Style::default().fg(MUTED)),
             Span::styled("q", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
             Span::styled(" quit", Style::default().fg(MUTED)),
         ])
@@ -828,7 +933,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(footer, area);
 }
 
-fn render_help(frame: &mut Frame<'_>, area: Rect) {
+fn render_help(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let popup = centered_rect(90, 88, area);
     frame.render_widget(Clear, popup);
     let mut lines = vec![
@@ -854,6 +959,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     add_help_line!("1-6 / Tab", "switch category");
     add_help_line!("j/k or arrows", "move process selection");
     add_help_line!("Page/Home/End", "jump through the process table");
+    add_help_line!("click", "select a process row with the mouse");
     add_help_line!("/", "filter by name, pid, user, command, or status");
     lines.push(Line::from(vec![
         Span::styled(format!("{:<16}", ""), Style::default()),
@@ -870,6 +976,8 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         "sort CPU, memory, impact, write, read, name, pid, runtime, user"
     );
     add_help_line!("i or Enter", "show or hide process inspector");
+    add_help_line!("O", "show or hide the overview panel");
+    add_help_line!("Ctrl-J / Ctrl-K", "scroll the inspector panel");
     add_help_line!("o", "open files and sockets for the selected process");
     add_help_line!("t / f", "send TERM / KILL after confirmation");
     add_help_line!(
@@ -894,9 +1002,15 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Press Esc, Enter, ?, or q to close.",
+        "Press j/k to scroll. Press Esc, Enter, ?, or q to close.",
         Style::default().fg(MUTED),
     )));
+
+    let inner_height = popup.height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(inner_height);
+    if app.help_scroll > max_scroll {
+        app.help_scroll = max_scroll;
+    }
 
     let help = Paragraph::new(lines)
         .block(
@@ -906,7 +1020,8 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
                 .style(panel_style()),
         )
         .style(Style::default().fg(TEXT))
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: true })
+        .scroll((app.help_scroll as u16, 0));
     frame.render_widget(help, popup);
 }
 
@@ -914,8 +1029,6 @@ fn render_handles(frame: &mut Frame<'_>, area: Rect, view: &HandlesView) {
     let popup = centered_rect(86, 86, area);
     frame.render_widget(Clear, popup);
 
-    // Split the available rows between the two sections so a long file list
-    // never crowds out the sockets, with the CLI offered for the full dump.
     let inner_height = popup.height.saturating_sub(2) as usize;
     let overhead = 8 + usize::from(view.error.is_some());
     let per_section = inner_height.saturating_sub(overhead) / 2;
@@ -1059,8 +1172,13 @@ fn push_pair(lines: &mut Vec<Line<'static>>, label: &str, value: &str) {
     ]));
 }
 
-fn right(value: String) -> String {
-    value
+fn right(value: String, width: usize) -> String {
+    let len = value.len();
+    if len >= width {
+        value
+    } else {
+        format!("{}{}", " ".repeat(width - len), value)
+    }
 }
 
 fn process_style(process: &ProcessRow) -> Style {
@@ -1108,8 +1226,6 @@ fn metric_block_with_spark(title: &'static str, spark: &str, spark_color: Color)
         .style(panel_style())
 }
 
-/// Glyph budget for a sparkline inside a metric block title, leaving room for
-/// the label, borders, and a little breathing space.
 fn spark_width(area: Rect) -> usize {
     (area.width as usize).saturating_sub(10).clamp(0, 32)
 }

@@ -1,14 +1,5 @@
 use crate::sampler::ProcessRow;
 
-/// A parsed process filter. The query is split on whitespace into terms that are
-/// ANDed together. Each term is one of:
-///
-/// - a numeric predicate like `cpu>50`, `mem<100mb`, `pid>=1000`
-/// - a field substring like `user:milo`, `name:node`, `status:run`
-/// - a plain substring, matched against the row's precomputed search text
-///
-/// Anything that does not parse as a predicate falls back to a plain substring,
-/// so the simple "just type a word" behavior is preserved.
 #[derive(Debug, Default)]
 pub struct Filter {
     terms: Vec<Term>,
@@ -51,7 +42,7 @@ impl Term {
     fn matches(&self, process: &ProcessRow) -> bool {
         match self {
             Term::Text(needle) => process.search_text.contains(needle.as_str()),
-            Term::Field { field, needle } => field.value(process).contains(needle.as_str()),
+            Term::Field { field, needle } => contains_ignore_case(field.value(process), needle),
             Term::Numeric { field, op, value } => op.compare(field.actual(process), *value),
         }
     }
@@ -80,11 +71,10 @@ impl TextField {
 
     fn value(self, process: &ProcessRow) -> &str {
         match self {
-            Self::User => &process.user_lowercase,
-            // sort_name is already lowercased at sample time.
             Self::Name => &process.sort_name,
-            Self::Status => &process.status_lowercase,
-            Self::Command => &process.command_lowercase,
+            Self::User => &process.user,
+            Self::Status => &process.status,
+            Self::Command => &process.command,
             Self::Pid => &process.pid_str,
         }
     }
@@ -142,8 +132,12 @@ impl Op {
     }
 }
 
+fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
+    let needle_lower = needle.to_lowercase();
+    haystack.to_lowercase().contains(&needle_lower)
+}
+
 fn parse_numeric(raw: &str) -> Option<Term> {
-    // Two-character operators are checked first so `>=` is not split as `>`.
     const OPERATORS: [(&str, Op); 4] =
         [(">=", Op::Ge), ("<=", Op::Le), (">", Op::Gt), ("<", Op::Lt)];
     for (token, op) in OPERATORS {
@@ -162,8 +156,6 @@ fn parse_numeric(raw: &str) -> Option<Term> {
     None
 }
 
-/// Parse a byte size with an optional decimal suffix (`100mb`, `2g`, `512`).
-/// Decimal (1000-based) units match how `format::bytes` displays sizes.
 fn parse_size(raw: &str) -> Option<f64> {
     let raw = raw.trim().to_lowercase();
     const SUFFIXES: [(&str, f64); 14] = [
@@ -214,13 +206,10 @@ mod tests {
             name: name.to_string(),
             sort_name: name.to_lowercase(),
             user: user_str.clone(),
-            user_lowercase: user_str.to_lowercase(),
             command: cmd_str.clone(),
-            command_lowercase: cmd_str.to_lowercase(),
             exe: "-".into(),
             cwd: "-".into(),
             status: status.into(),
-            status_lowercase: status.to_lowercase(),
             cpu_usage: cpu,
             memory,
             virtual_memory: memory,
@@ -271,15 +260,12 @@ mod tests {
     fn terms_are_anded_together() {
         let filter = Filter::parse("cpu>50 user:milo");
         assert!(filter.matches(&process(1, "node", "milo", 80.0, 10)));
-        // Right user, but not busy enough.
         assert!(!filter.matches(&process(2, "node", "milo", 5.0, 10)));
-        // Busy, but wrong user.
         assert!(!filter.matches(&process(3, "node", "root", 80.0, 10)));
     }
 
     #[test]
     fn unparseable_predicate_falls_back_to_substring() {
-        // `cpu` with no operator/value is just a word to search for.
         let filter = Filter::parse("cpu");
         assert!(filter.matches(&process(1, "cpuminer", "milo", 1.0, 10)));
         assert!(!filter.matches(&process(2, "node", "milo", 1.0, 10)));

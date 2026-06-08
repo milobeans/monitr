@@ -12,7 +12,7 @@ mod ui;
 
 use std::{
     env,
-    io::{self, Stdout},
+    io::{self, BufWriter, Stdout},
     thread,
     time::Duration,
 };
@@ -517,7 +517,7 @@ Options:
     );
 }
 
-type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
+type CrosstermTerminal = Terminal<CrosstermBackend<BufWriter<Stdout>>>;
 
 struct TerminalSession {
     terminal: CrosstermTerminal,
@@ -558,7 +558,7 @@ fn enter_terminal() -> Result<CrosstermTerminal> {
         let _ = disable_raw_mode();
         return Err(error.into());
     }
-    let backend = CrosstermBackend::new(io::stdout());
+    let backend = CrosstermBackend::new(BufWriter::new(io::stdout()));
     let mut terminal = match Terminal::new(backend) {
         Ok(terminal) => terminal,
         Err(error) => {

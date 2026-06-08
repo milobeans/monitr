@@ -1,6 +1,6 @@
 [package]
 name = "monitr"
-version = "0.2.5"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Milo Evans"]
@@ -31,6 +31,6 @@ sysinfo = { version = "0.38.4", default-features = false, features = [
 [profile.release]
 codegen-units = 1
 lto = true
-opt-level = "z"
+opt-level = 3
 panic = "abort"
 strip = true
