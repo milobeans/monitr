@@ -20,15 +20,15 @@ use crate::{
     sampler::{DiskRow, NetworkRow, ProcessRow},
 };
 
-const BG: Color = Color::Rgb(12, 14, 16);
-const PANEL: Color = Color::Rgb(24, 27, 31);
-const PANEL_ALT: Color = Color::Rgb(34, 38, 43);
-const TEXT: Color = Color::Rgb(220, 224, 229);
-const MUTED: Color = Color::Rgb(132, 142, 152);
-const GREEN: Color = Color::Rgb(69, 190, 132);
-const BLUE: Color = Color::Rgb(83, 153, 220);
-const YELLOW: Color = Color::Rgb(224, 176, 72);
-const RED: Color = Color::Rgb(224, 87, 87);
+const BG: Color = Color::Rgb(7, 10, 16);
+const PANEL: Color = Color::Rgb(16, 21, 33);
+const PANEL_ALT: Color = Color::Rgb(24, 30, 47);
+const TEXT: Color = Color::Rgb(235, 241, 255);
+const MUTED: Color = Color::Rgb(142, 156, 190);
+const GREEN: Color = Color::Rgb(46, 224, 140);
+const BLUE: Color = Color::Rgb(66, 165, 255);
+const YELLOW: Color = Color::Rgb(255, 198, 46);
+const RED: Color = Color::Rgb(255, 90, 106);
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
