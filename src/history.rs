@@ -51,12 +51,12 @@ impl History {
         self.process_cpu.retain(|pid, _| live_pids.contains(pid));
     }
 
-    pub fn cpu_sparkline(&self, width: usize) -> String {
-        format::sparkline(self.cpu.recent(width), 100.0)
+    pub fn cpu_recent(&self, width: usize) -> Vec<f64> {
+        self.cpu.recent(width).to_vec()
     }
 
-    pub fn memory_sparkline(&self, width: usize) -> String {
-        format::sparkline(self.memory.recent(width), 100.0)
+    pub fn memory_recent(&self, width: usize) -> Vec<f64> {
+        self.memory.recent(width).to_vec()
     }
 
     pub fn process_cpu_sparkline(&self, pid: u32, width: usize) -> Option<String> {
@@ -142,13 +142,13 @@ mod tests {
     }
 
     #[test]
-    fn records_system_series_and_renders_sparklines() {
+    fn records_system_series_and_exposes_recent_values() {
         let mut history = History::default();
         history.record(&snapshot(0.0, 0, Vec::new()));
         history.record(&snapshot(100.0, 100, Vec::new()));
 
-        assert_eq!(history.cpu_sparkline(8), "▁█");
-        assert_eq!(history.memory_sparkline(8), "▁█");
+        assert_eq!(history.cpu_recent(8), vec![0.0, 100.0]);
+        assert_eq!(history.memory_recent(8), vec![0.0, 100.0]);
     }
 
     #[test]
@@ -170,9 +170,6 @@ mod tests {
         for _ in 0..(CAPACITY + 50) {
             history.record(&snapshot(50.0, 50, vec![process(1, 50.0)]));
         }
-        assert_eq!(
-            history.cpu_sparkline(CAPACITY + 50).chars().count(),
-            CAPACITY
-        );
+        assert_eq!(history.cpu_recent(CAPACITY + 50).len(), CAPACITY);
     }
 }

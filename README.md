@@ -6,7 +6,7 @@
 
 - CPU, Memory, Energy, Disk, and Network views
 - Movers view for CPU, memory, and disk-rate changes since the previous sample, each row annotated with the dominant change
-- Inline CPU and memory sparklines in the overview, plus a per-process CPU trend in the inspector
+- History-backed CPU and memory overview charts, plus a per-process CPU trend in the inspector
 - Sortable process table with fast keyboard navigation
 - Process filter by PID, name, user, command, or status, with `cpu>50`, `mem<100mb`, and `field:value` predicates
 - Inspector panel for the selected process
@@ -144,8 +144,8 @@ The strongest opportunities for `monitr` are features that lean into terminal-na
 
 - Per-process network attribution: show bytes in/out and active connections by PID, not only interface-level totals. macOS exposes no cheap syscall for this, so it is deferred to an on-demand path rather than the refresh loop; the `o` overlay and `ports` command already identify socket owners.
 - Better energy and wakeup data: replace the current lightweight energy estimate with richer macOS-specific signals (idle/interrupt wakeups) where public APIs expose them.
-- Longer timeline windows: the history buffer that drives sparklines is in place; extend the Movers view from previous-sample deltas to 10 second, 1 minute, and 5 minute windows on top of it.
-- Wider sparklines: extend the existing CPU/memory sparklines to disk and network, and into the process table when the terminal has room.
+- Longer timeline windows: the history buffer that drives the overview charts is in place; extend the Movers view from previous-sample deltas to 10 second, 1 minute, and 5 minute windows on top of it.
+- Wider trend visuals: extend the existing CPU/memory overview charts to disk and network, and add richer per-process trend views when the terminal has room.
 - Record and replay: export sampled sessions as JSON or CSV, then replay or diff them later for performance investigations.
 - Watch rules and alerts: notify when a process exceeds CPU, memory, disk, or network thresholds, or when a matching process spawns, exits, or changes state, including a scriptable `monitr watch` for pipelines.
 - Diagnostic capture: build on `monitr inspect` to collect a targeted report for a process, including process tree, sample/spindump output, and recent metric history.

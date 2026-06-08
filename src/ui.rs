@@ -8,7 +8,6 @@ use ratatui_widgets::{
     block::Block,
     borders::Borders,
     clear::Clear,
-    gauge::Gauge,
     paragraph::{Paragraph, Wrap},
     table::{Cell, Row, Table, TableState},
     tabs::Tabs,
@@ -29,13 +28,17 @@ const GREEN: Color = Color::Rgb(46, 224, 140);
 const BLUE: Color = Color::Rgb(66, 165, 255);
 const YELLOW: Color = Color::Rgb(255, 198, 46);
 const RED: Color = Color::Rgb(255, 90, 106);
+const GRID: Color = Color::Rgb(96, 115, 152);
+const SUMMARY_GREEN: Color = Color::Rgb(41, 118, 84);
+const SUMMARY_YELLOW: Color = Color::Rgb(173, 145, 45);
+const SUMMARY_RED: Color = Color::Rgb(163, 69, 57);
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
     let overview_height = if app.overview_visible {
-        Constraint::Length(5)
+        Constraint::Length(7)
     } else {
         Constraint::Length(0)
     };
@@ -181,37 +184,46 @@ fn render_overview(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ])
         .split(area);
 
-    let cpu_ratio = (snapshot.totals.cpu_usage as f64 / 100.0).clamp(0.0, 1.0);
-    let cpu_spark = app.history().cpu_sparkline(spark_width(chunks[0]));
-    let cpu = Gauge::default()
-        .block(metric_block_with_spark("CPU", &cpu_spark, GREEN))
-        .gauge_style(Style::default().fg(usage_color(snapshot.totals.cpu_usage as f64)))
-        .ratio(cpu_ratio)
-        .label(format!(
-            "{} across {} cores",
+    render_usage_chart(
+        frame,
+        chunks[0],
+        "CPU",
+        &app.history().cpu_recent(chart_width(chunks[0])),
+        100.0,
+        snapshot.totals.cpu_usage as f64,
+        &[
             format::percent(snapshot.totals.cpu_usage as f64),
-            snapshot.totals.cpu_count
-        ));
-    frame.render_widget(cpu, chunks[0]);
+            "across".to_string(),
+            format!("{} Cores", snapshot.totals.cpu_count),
+        ],
+    );
 
     let memory_ratio = if snapshot.totals.total_memory > 0 {
         snapshot.totals.used_memory as f64 / snapshot.totals.total_memory as f64
     } else {
         0.0
     };
-    let memory_spark = app.history().memory_sparkline(spark_width(chunks[1]));
-    let memory = Gauge::default()
-        .block(metric_block_with_spark("Memory", &memory_spark, BLUE))
-        .gauge_style(Style::default().fg(usage_color(memory_ratio * 100.0)))
-        .ratio(memory_ratio.clamp(0.0, 1.0))
-        .label(format!(
-            "{} / {}  swap {} / {}",
-            format::bytes(snapshot.totals.used_memory),
-            format::bytes(snapshot.totals.total_memory),
-            format::bytes(snapshot.totals.used_swap),
-            format::bytes(snapshot.totals.total_swap)
-        ));
-    frame.render_widget(memory, chunks[1]);
+    render_usage_chart(
+        frame,
+        chunks[1],
+        "Memory",
+        &app.history().memory_recent(chart_width(chunks[1])),
+        100.0,
+        memory_ratio * 100.0,
+        &[
+            format::percent(memory_ratio * 100.0),
+            format!(
+                "{}/{}",
+                format::bytes(snapshot.totals.used_memory),
+                format::bytes(snapshot.totals.total_memory)
+            ),
+            format!(
+                "swap {}/{}",
+                format::bytes(snapshot.totals.used_swap),
+                format::bytes(snapshot.totals.total_swap)
+            ),
+        ],
+    );
 
     let disk = Paragraph::new(vec![
         Line::from(vec![
@@ -1243,33 +1255,177 @@ fn metric_block(title: &'static str) -> Block<'static> {
         .style(panel_style())
 }
 
-fn metric_block_with_spark(title: &'static str, spark: &str, spark_color: Color) -> Block<'static> {
-    let heading = if spark.is_empty() {
-        Line::from(vec![Span::styled(
-            title,
-            Style::default().add_modifier(Modifier::BOLD),
-        )])
-    } else {
-        Line::from(vec![
-            Span::styled(
-                format!("{title} "),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(spark.to_string(), Style::default().fg(spark_color)),
-        ])
-    };
-    Block::default()
-        .title(heading)
-        .borders(Borders::ALL)
-        .style(panel_style())
-}
-
-fn spark_width(area: Rect) -> usize {
-    (area.width as usize).saturating_sub(10).clamp(0, 32)
-}
-
 fn value_style(color: Color) -> Style {
     Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
+fn render_usage_chart(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &'static str,
+    values: &[f64],
+    scale_max: f64,
+    current_percent: f64,
+    summary_lines: &[String],
+) {
+    let block = metric_block(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width < 14 || inner.height < 3 {
+        return;
+    }
+
+    let lines = build_usage_chart_lines(
+        inner.width as usize,
+        inner.height as usize,
+        values,
+        scale_max,
+        current_percent,
+        summary_lines,
+    );
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn build_usage_chart_lines(
+    width: usize,
+    height: usize,
+    values: &[f64],
+    scale_max: f64,
+    current_percent: f64,
+    summary_lines: &[String],
+) -> Vec<Line<'static>> {
+    let summary_width = (width / 3).clamp(10, 14).min(width.saturating_sub(6));
+    let chart_width = width.saturating_sub(summary_width + 1);
+    if chart_width < 6 || summary_width == 0 {
+        return vec![Line::from(center_text(width, &summary_lines.join(" | ")))];
+    }
+
+    let aligned_values = align_chart_values(values, chart_width);
+    let guide_rows = guide_rows(height);
+    let summary_bg = summary_bg_color(current_percent);
+    let summary_fg = summary_fg_color(current_percent);
+    let summary_start = height.saturating_sub(summary_lines.len()) / 2;
+
+    (0..height)
+        .map(|row| {
+            let mut spans = Vec::with_capacity(chart_width + 2);
+
+            for value in &aligned_values {
+                let guide = guide_rows.contains(&row);
+                let ch = if guide { '╌' } else { ' ' };
+                let style = match value {
+                    Some(value) => {
+                        let filled = filled_rows(*value, scale_max, height);
+                        if row >= height.saturating_sub(filled) {
+                            Style::default()
+                                .fg(if guide {
+                                    GRID
+                                } else {
+                                    usage_band_color(row, height)
+                                })
+                                .bg(usage_band_color(row, height))
+                        } else {
+                            Style::default()
+                                .fg(if guide { GRID } else { MUTED })
+                                .bg(PANEL_ALT)
+                        }
+                    }
+                    None => Style::default()
+                        .fg(if guide { GRID } else { MUTED })
+                        .bg(PANEL_ALT),
+                };
+                spans.push(Span::styled(ch.to_string(), style));
+            }
+
+            spans.push(Span::styled("│", Style::default().fg(MUTED).bg(summary_bg)));
+
+            let summary_index = row.checked_sub(summary_start);
+            let is_headline = summary_index == Some(0);
+            let text = summary_index
+                .and_then(|index| summary_lines.get(index))
+                .map_or_else(
+                    || " ".repeat(summary_width),
+                    |line| {
+                        center_text(summary_width, &format::truncate_middle(line, summary_width))
+                    },
+                );
+            let summary_style = if is_headline {
+                Style::default()
+                    .fg(summary_fg)
+                    .bg(summary_bg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(summary_fg).bg(summary_bg)
+            };
+            spans.push(Span::styled(text, summary_style));
+
+            Line::from(spans)
+        })
+        .collect()
+}
+
+fn align_chart_values(values: &[f64], width: usize) -> Vec<Option<f64>> {
+    let mut aligned = vec![None; width];
+    for (slot, value) in aligned
+        .iter_mut()
+        .rev()
+        .zip(values.iter().rev().take(width))
+    {
+        *slot = Some(*value);
+    }
+    aligned
+}
+
+fn filled_rows(value: f64, scale_max: f64, height: usize) -> usize {
+    if scale_max <= 0.0 {
+        return 0;
+    }
+    ((value / scale_max).clamp(0.0, 1.0) * height as f64).ceil() as usize
+}
+
+fn guide_rows(height: usize) -> Vec<usize> {
+    if height <= 1 {
+        return Vec::new();
+    }
+    [0.25, 0.5, 0.75]
+        .into_iter()
+        .map(|ratio| ((1.0 - ratio) * (height.saturating_sub(1)) as f64).round() as usize)
+        .fold(Vec::new(), |mut rows, row| {
+            if !rows.contains(&row) {
+                rows.push(row);
+            }
+            rows
+        })
+}
+
+fn usage_band_color(row: usize, height: usize) -> Color {
+    let percent = ((height.saturating_sub(row)) as f64 / height.max(1) as f64) * 100.0;
+    usage_color(percent)
+}
+
+fn summary_bg_color(value: f64) -> Color {
+    if value >= 85.0 {
+        SUMMARY_RED
+    } else if value >= 60.0 {
+        SUMMARY_YELLOW
+    } else {
+        SUMMARY_GREEN
+    }
+}
+
+fn summary_fg_color(value: f64) -> Color {
+    if value >= 60.0 { BG } else { TEXT }
+}
+
+fn chart_width(area: Rect) -> usize {
+    area.width.saturating_sub(14) as usize
+}
+
+fn center_text(width: usize, text: &str) -> String {
+    let text_width = text.chars().count().min(width);
+    let left = width.saturating_sub(text_width) / 2;
+    let right = width.saturating_sub(text_width + left);
+    format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
 }
 
 fn sort_header(label: &str, active: bool, descending: bool) -> String {
