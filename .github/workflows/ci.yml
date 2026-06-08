@@ -137,15 +137,16 @@ jobs:
 
           published = False
           published_sha = ""
-          index_request = urllib.request.Request(
-              "https://index.crates.io/mo/ni/monitr",
+          crate_metadata_request = urllib.request.Request(
+              f"https://crates.io/api/v1/crates/monitr/{version}",
               headers={"User-Agent": "monitr-release-workflow"},
           )
-          with urllib.request.urlopen(index_request) as response:
-              versions = [json.loads(line) for line in response.read().decode().splitlines()]
-
-          if any(entry.get("vers") == version for entry in versions):
-              published = True
+          try:
+              with urllib.request.urlopen(crate_metadata_request):
+                  published = True
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404:
+                  raise
 
           if published:
               crate_url = f"https://static.crates.io/crates/monitr/monitr-{version}.crate"
