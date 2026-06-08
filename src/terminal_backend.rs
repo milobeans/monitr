@@ -126,7 +126,7 @@ impl<W: Write> Backend for CrosstermBackend<W> {
     }
 
     fn window_size(&mut self) -> io::Result<WindowSize> {
-        let crossterm::terminal::WindowSize {
+        let terminal::WindowSize {
             columns,
             rows,
             width,
