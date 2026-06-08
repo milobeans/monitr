@@ -62,28 +62,36 @@ jobs:
         env:
           BEFORE_SHA: ${{ github.event.before }}
         run: |
-          current="$(python3 - <<'PY'
+          python3 - <<'PY'
+          import os
+          import subprocess
           import tomllib
           from pathlib import Path
-          print(tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"])
+
+          current = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+          before_sha = os.environ["BEFORE_SHA"]
+          previous = ""
+
+          if (
+              subprocess.run(
+                  ["git", "cat-file", "-e", f"{before_sha}^{{commit}}"],
+                  check=False,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+              ).returncode
+              == 0
+          ):
+              previous_manifest = subprocess.check_output(
+                  ["git", "show", f"{before_sha}:Cargo.toml"],
+                  text=True,
+              )
+              previous = tomllib.loads(previous_manifest)["package"]["version"]
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"current={current}\n")
+              fh.write(f"previous={previous}\n")
+              fh.write(f"changed={str(current != previous).lower()}\n")
           PY
-          )"
-          previous=""
-          if git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
-            previous="$(git show "${BEFORE_SHA}:Cargo.toml" | python3 - <<'PY'
-          import sys
-          import tomllib
-          print(tomllib.loads(sys.stdin.read())["package"]["version"])
-          PY
-            )"
-          fi
-          changed=false
-          if [ "${current}" != "${previous}" ]; then
-            changed=true
-          fi
-          echo "current=${current}" >> "${GITHUB_OUTPUT}"
-          echo "previous=${previous}" >> "${GITHUB_OUTPUT}"
-          echo "changed=${changed}" >> "${GITHUB_OUTPUT}"
 
       - name: Inspect release state
         id: release_state
