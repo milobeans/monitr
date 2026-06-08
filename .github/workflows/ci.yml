@@ -137,18 +137,24 @@ jobs:
 
           published = False
           published_sha = ""
-          crate_url = f"https://crates.io/api/v1/crates/monitr/{version}/download"
-          crate_request = urllib.request.Request(
-              crate_url, headers={"User-Agent": "monitr-release-workflow"}
+          crate_metadata_url = f"https://crates.io/api/v1/crates/monitr/{version}"
+          metadata_request = urllib.request.Request(
+              crate_metadata_url, headers={"User-Agent": "monitr-release-workflow"}
           )
           try:
-              with urllib.request.urlopen(crate_request) as response:
-                  crate_bytes = response.read()
+              with urllib.request.urlopen(metadata_request):
+                  published = True
           except urllib.error.HTTPError as exc:
               if exc.code != 404:
                   raise
-          else:
-              published = True
+
+          if published:
+              crate_url = f"https://crates.io/api/v1/crates/monitr/{version}/download"
+              crate_request = urllib.request.Request(
+                  crate_url, headers={"User-Agent": "monitr-release-workflow"}
+              )
+              with urllib.request.urlopen(crate_request) as response:
+                  crate_bytes = response.read()
               with tarfile.open(fileobj=io.BytesIO(crate_bytes), mode="r:gz") as archive:
                   try:
                       with archive.extractfile(
