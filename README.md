@@ -64,14 +64,15 @@ monitr --filter codex
 | `j`/`k`, arrows | Move selection |
 | `PageUp`/`PageDown`, `Home`/`End` | Jump in the process table |
 | `/` | Filter processes |
-| `Ctrl-U` | Clear the active filter |
+| `Ctrl-U` | Clear the active filter from anywhere |
 | `s` | Cycle sort key |
 | `S` | Reverse sort direction |
 | `c`, `m`, `e`, `d`, `D`, `n`, `p`, `T`, `u` | Sort by CPU, memory, energy impact, disk write, disk read, name, PID, runtime, user |
 | `i`, `Enter` | Toggle inspector |
 | `t` | Send TERM after confirmation |
 | `f` | Send KILL after confirmation |
-| `+`, `-` | Adjust refresh interval |
+| `+` | Slow the refresh interval |
+| `-` | Speed up the refresh interval |
 | `r` | Refresh now |
 | `?` | Help |
 | `q`, `Esc`, `Ctrl-C` | Quit |

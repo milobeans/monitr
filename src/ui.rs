@@ -58,25 +58,36 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
 
 fn render_title(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let snapshot = app.snapshot();
-    let status = app
+    let (status, status_style) = app
         .confirm
         .map(|intent| {
             let pid = app
                 .selected_pid()
                 .map(|pid| pid.to_string())
                 .unwrap_or_else(|| "-".to_string());
-            format!("Confirm {} pid {}: y/n", intent.label(), pid)
+            (
+                format!("Confirm {} pid {}: y/n", intent.label(), pid),
+                Style::default().fg(RED).add_modifier(Modifier::BOLD),
+            )
         })
-        .or_else(|| app.notice.as_ref().map(|notice| notice.text().to_string()))
+        .or_else(|| {
+            app.notice
+                .as_ref()
+                .map(|notice| (notice.text().to_string(), Style::default().fg(YELLOW)))
+        })
         .unwrap_or_else(|| {
-            format!(
-                "{} processes | sort {} {} | refresh {} ms | sample {:.2}s | uptime {}",
-                snapshot.process_count,
-                app.sort_key.title(),
-                if app.sort_desc { "desc" } else { "asc" },
-                app.interval().as_millis(),
-                snapshot.sample_span.as_secs_f64(),
-                format::duration(snapshot.totals.uptime)
+            (
+                format!(
+                    "{} of {} shown | sort {} {} | refresh {} ms | sample {:.2}s | uptime {}",
+                    app.visible_count(),
+                    app.process_count(),
+                    app.sort_key.title(),
+                    if app.sort_desc { "desc" } else { "asc" },
+                    app.interval().as_millis(),
+                    snapshot.sample_span.as_secs_f64(),
+                    format::duration(snapshot.totals.uptime)
+                ),
+                Style::default().fg(MUTED),
             )
         });
     let filter = if app.filter_mode {
@@ -101,7 +112,7 @@ fn render_title(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Span::styled("  ", Style::default().fg(MUTED)),
         Span::styled(filter, Style::default().fg(BLUE)),
         Span::styled("  ", Style::default().fg(MUTED)),
-        Span::styled(status, Style::default().fg(YELLOW)),
+        Span::styled(status, status_style),
     ]);
     frame.render_widget(Paragraph::new(line).style(Style::default().bg(BG)), area);
 }
@@ -227,20 +238,15 @@ fn render_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
-    let (headers, widths) = table_schema(app.tab);
-    let header = Row::new(
-        headers
-            .iter()
-            .map(|header| Cell::from(*header))
-            .collect::<Vec<_>>(),
-    )
-    .style(
-        Style::default()
-            .fg(TEXT)
-            .bg(PANEL_ALT)
-            .add_modifier(Modifier::BOLD),
-    )
-    .height(1);
+    let (headers, widths) = table_schema(app.tab, app.sort_key, app.sort_desc);
+    let header = Row::new(headers.iter().cloned().map(Cell::from).collect::<Vec<_>>())
+        .style(
+            Style::default()
+                .fg(TEXT)
+                .bg(PANEL_ALT)
+                .add_modifier(Modifier::BOLD),
+        )
+        .height(1);
 
     let rows = app
         .visible
@@ -269,14 +275,23 @@ fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 fn process_table_title(app: &App) -> String {
-    match app.tab {
-        Tab::Disk => format!("Disk activity by process | {} visible", app.visible.len()),
-        Tab::Network => format!(
-            "Process context | {} visible | interface totals in inspector",
-            app.visible.len()
-        ),
-        _ => format!("{} | {} visible", app.tab.title(), app.visible.len()),
+    let base = match app.tab {
+        Tab::Disk => "Disk activity by process".to_string(),
+        Tab::Network => "Process context | interface totals in inspector".to_string(),
+        _ => app.tab.title().to_string(),
+    };
+    if app.visible_count() == 0 && !app.filter.is_empty() {
+        return format!(
+            "{} | no matches for {}",
+            base,
+            format::truncate_middle(&app.filter, 24)
+        );
     }
+    let selection = app
+        .selected_position()
+        .map(|selected| format!(" | selected {selected}/{}", app.visible_count()))
+        .unwrap_or_default();
+    format!("{} | {} visible{}", base, app.visible_count(), selection)
 }
 
 fn render_stateful_table(
@@ -288,11 +303,21 @@ fn render_stateful_table(
     frame.render_stateful_widget(table, area, state);
 }
 
-fn table_schema(tab: Tab) -> (Vec<&'static str>, Vec<Constraint>) {
-    match tab {
+fn table_schema(
+    tab: Tab,
+    sort_key: crate::app::SortKey,
+    sort_desc: bool,
+) -> (Vec<String>, Vec<Constraint>) {
+    let (headers, widths) = match tab {
         Tab::Cpu => (
             vec![
-                "PID", "Process", "User", "% CPU", "Memory", "Time", "Status",
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header("User", sort_key == crate::app::SortKey::User, sort_desc),
+                sort_header("% CPU", sort_key == crate::app::SortKey::Cpu, sort_desc),
+                sort_header("Memory", sort_key == crate::app::SortKey::Memory, sort_desc),
+                sort_header("Time", sort_key == crate::app::SortKey::Runtime, sort_desc),
+                "Status".to_string(),
             ],
             vec![
                 Constraint::Length(7),
@@ -306,7 +331,13 @@ fn table_schema(tab: Tab) -> (Vec<&'static str>, Vec<Constraint>) {
         ),
         Tab::Memory => (
             vec![
-                "PID", "Process", "User", "Memory", "% Mem", "Virtual", "Status",
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header("User", sort_key == crate::app::SortKey::User, sort_desc),
+                sort_header("Memory", sort_key == crate::app::SortKey::Memory, sort_desc),
+                "% Mem".to_string(),
+                "Virtual".to_string(),
+                "Status".to_string(),
             ],
             vec![
                 Constraint::Length(7),
@@ -320,7 +351,13 @@ fn table_schema(tab: Tab) -> (Vec<&'static str>, Vec<Constraint>) {
         ),
         Tab::Energy => (
             vec![
-                "PID", "Process", "User", "Impact", "% CPU", "Disk/s", "Status",
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header("User", sort_key == crate::app::SortKey::User, sort_desc),
+                sort_header("Impact", sort_key == crate::app::SortKey::Energy, sort_desc),
+                sort_header("% CPU", sort_key == crate::app::SortKey::Cpu, sort_desc),
+                "Disk/s".to_string(),
+                "Status".to_string(),
             ],
             vec![
                 Constraint::Length(7),
@@ -334,7 +371,21 @@ fn table_schema(tab: Tab) -> (Vec<&'static str>, Vec<Constraint>) {
         ),
         Tab::Disk => (
             vec![
-                "PID", "Process", "User", "Read/s", "Write/s", "Read", "Written",
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header("User", sort_key == crate::app::SortKey::User, sort_desc),
+                sort_header(
+                    "Read/s",
+                    sort_key == crate::app::SortKey::DiskRead,
+                    sort_desc,
+                ),
+                sort_header(
+                    "Write/s",
+                    sort_key == crate::app::SortKey::DiskWrite,
+                    sort_desc,
+                ),
+                "Read".to_string(),
+                "Written".to_string(),
             ],
             vec![
                 Constraint::Length(7),
@@ -348,7 +399,13 @@ fn table_schema(tab: Tab) -> (Vec<&'static str>, Vec<Constraint>) {
         ),
         Tab::Network => (
             vec![
-                "PID", "Process", "User", "% CPU", "Memory", "Disk/s", "Status",
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header("User", sort_key == crate::app::SortKey::User, sort_desc),
+                sort_header("% CPU", sort_key == crate::app::SortKey::Cpu, sort_desc),
+                sort_header("Memory", sort_key == crate::app::SortKey::Memory, sort_desc),
+                "Disk/s".to_string(),
+                "Status".to_string(),
             ],
             vec![
                 Constraint::Length(7),
@@ -360,7 +417,8 @@ fn table_schema(tab: Tab) -> (Vec<&'static str>, Vec<Constraint>) {
                 Constraint::Length(10),
             ],
         ),
-    }
+    };
+    (headers, widths)
 }
 
 fn process_row(process: &ProcessRow, tab: Tab) -> Row<'static> {
@@ -511,10 +569,21 @@ fn render_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
         push_pair(&mut lines, "CWD", &process.cwd);
         push_pair(&mut lines, "Command", &process.command);
     } else {
+        let empty_message = if app.visible_count() == 0 && !app.filter.is_empty() {
+            "No processes match the current filter"
+        } else {
+            "No process selected"
+        };
         lines.push(Line::from(Span::styled(
-            "No process selected",
+            empty_message,
             Style::default().fg(MUTED),
         )));
+        if app.visible_count() == 0 && !app.filter.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Press Ctrl-U to clear the filter or / to refine it.",
+                Style::default().fg(MUTED),
+            )));
+        }
     }
 
     if app.tab == Tab::Disk {
@@ -527,7 +596,7 @@ fn render_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
-                .title(inspector_title(app.tab))
+                .title(inspector_title(app))
                 .borders(Borders::ALL)
                 .style(panel_style()),
         )
@@ -536,11 +605,18 @@ fn render_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn inspector_title(tab: Tab) -> &'static str {
-    match tab {
-        Tab::Disk => "Inspector | volumes",
-        Tab::Network => "Inspector | interfaces",
-        _ => "Inspector",
+fn inspector_title(app: &App) -> String {
+    let pid = app.selected_pid().map(|pid| format!("pid {pid}"));
+    match app.tab {
+        Tab::Disk => pid
+            .map(|pid| format!("Inspector | {pid} + volumes"))
+            .unwrap_or_else(|| "Inspector | volumes".to_string()),
+        Tab::Network => pid
+            .map(|pid| format!("Inspector | {pid} + interfaces"))
+            .unwrap_or_else(|| "Inspector | interfaces".to_string()),
+        _ => pid
+            .map(|pid| format!("Inspector | {pid}"))
+            .unwrap_or_else(|| "Inspector".to_string()),
     }
 }
 
@@ -602,9 +678,17 @@ fn append_network_lines(lines: &mut Vec<Line<'static>>, networks: &[NetworkRow])
 
 fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let mode = if app.filter_mode {
-        "filter mode: type, enter to keep, ctrl-u clear"
+        if area.width >= 90 {
+            "filter: type to search, Backspace edits, Enter or Esc keeps focus, Ctrl-U clears"
+        } else {
+            "filter: type, Backspace edit, Enter/Esc keep, Ctrl-U clear"
+        }
+    } else if area.width >= 150 {
+        "1-5/Tab views  j/k move  PgUp/PgDn jump  / filter  Ctrl-U clear  s cycle  S reverse  i inspector  +/- refresh  r resample  ? help  q quit"
+    } else if area.width >= 110 {
+        "1-5 views  j/k move  / filter  Ctrl-U clear  s/S sort  i inspector  +/- refresh  ? help  q quit"
     } else {
-        "1-5 tabs  j/k move  / filter  ctrl-u clear  s sort  D read  T runtime  S reverse  i details  t term  f kill  +/- interval  ? help  q quit"
+        "1-5 views  j/k move  / filter  s/S sort  i info  ? help  q quit"
     };
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(" ", Style::default().bg(PANEL)),
@@ -626,15 +710,15 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("1-5 / Tab        switch category"),
         Line::from("j/k or arrows    move process selection"),
         Line::from("Page/Home/End    jump through the process table"),
-        Line::from("/                filter by name, pid, user, command, status"),
-        Line::from("Ctrl-U           clear the active filter"),
+        Line::from("/                filter by name, pid, user, command, or status"),
+        Line::from("Ctrl-U           clear the active filter anywhere"),
         Line::from("s / S            cycle sort key / reverse sort"),
         Line::from(
             "c m e d D n p T u sort CPU, memory, impact, write, read, name, pid, runtime, user",
         ),
         Line::from("i or Enter       show or hide process inspector"),
         Line::from("t / f            send TERM / KILL after confirmation"),
-        Line::from("+ / -            slower or faster refresh interval"),
+        Line::from("+ / -            slower / faster refresh interval"),
         Line::from("r                refresh immediately"),
         Line::from("q, Esc, Ctrl-C  quit"),
         Line::from(""),
@@ -689,6 +773,14 @@ fn metric_block(title: &'static str) -> Block<'static> {
 
 fn value_style(color: Color) -> Style {
     Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
+fn sort_header(label: &str, active: bool, descending: bool) -> String {
+    if active {
+        format!("{label} {}", if descending { "v" } else { "^" })
+    } else {
+        label.to_string()
+    }
 }
 
 fn usage_color(value: f64) -> Color {

@@ -227,6 +227,21 @@ impl App {
         self.interval
     }
 
+    pub fn visible_count(&self) -> usize {
+        self.visible.len()
+    }
+
+    pub fn process_count(&self) -> usize {
+        self.snapshot.process_count
+    }
+
+    pub fn selected_position(&self) -> Option<usize> {
+        self.table_state
+            .selected()
+            .filter(|selected| *selected < self.visible.len())
+            .map(|selected| selected + 1)
+    }
+
     fn handle_event(&mut self, event: Event) -> Result<bool> {
         let Event::Key(key) = event else {
             return Ok(false);
@@ -396,17 +411,17 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.filter.pop();
-                self.rebuild_view(previous_pid);
+                self.refilter_view(previous_pid);
                 true
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.filter.clear();
-                self.rebuild_view(previous_pid);
+                self.refilter_view(previous_pid);
                 true
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.filter.push(c);
-                self.rebuild_view(previous_pid);
+                self.refilter_view(previous_pid);
                 true
             }
             _ => false,
@@ -425,13 +440,17 @@ impl App {
             return false;
         }
         self.filter.clear();
-        self.rebuild_view(self.selected_pid());
+        self.refilter_view(self.selected_pid());
         self.notice = Some(Notice::new("filter cleared"));
         true
     }
 
     fn rebuild_view(&mut self, selected_pid: Option<u32>) {
         self.sort_processes();
+        self.refilter_view(selected_pid);
+    }
+
+    fn refilter_view(&mut self, selected_pid: Option<u32>) {
         let filter = self.filter.trim().to_lowercase();
         self.visible = self
             .snapshot
@@ -649,6 +668,8 @@ fn is_ctrl_c(key: KeyEvent) -> bool {
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
+    use crate::sampler::ProcessRow;
+
     use super::{App, SortKey, Tab};
 
     #[test]
@@ -744,5 +765,39 @@ mod tests {
             app.notice.as_ref().map(|notice| notice.text()),
             Some("filter cleared")
         );
+    }
+
+    #[test]
+    fn refilter_preserves_existing_process_order() {
+        let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+        let Some(template) = app.snapshot.processes.first().cloned() else {
+            return;
+        };
+
+        app.sort_key = SortKey::Name;
+        app.sort_desc = false;
+        app.snapshot.processes = vec![
+            fake_process(&template, 1, "zeta"),
+            fake_process(&template, 2, "alpha"),
+            fake_process(&template, 3, "beta"),
+        ];
+        app.filter = "a".into();
+
+        app.refilter_view(None);
+
+        let ordered_pids = app
+            .visible
+            .iter()
+            .map(|index| app.snapshot.processes[*index].pid)
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_pids, vec![1, 2, 3]);
+    }
+
+    fn fake_process(template: &ProcessRow, pid: u32, name: &str) -> ProcessRow {
+        let mut process = template.clone();
+        process.pid = pid;
+        process.name = name.to_string();
+        process.search_text = format!("{pid} {name} user command running");
+        process
     }
 }
