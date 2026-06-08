@@ -520,7 +520,7 @@ pub fn column_widths(tab: Tab, area_width: u16) -> Vec<usize> {
             Constraint::Length(n) => *n as usize,
             Constraint::Min(n) => {
                 let extra = available.saturating_sub(min_total);
-                let share = if min_count > 0 { extra / min_count } else { 0 };
+                let share = extra.checked_div(min_count).unwrap_or(0);
                 *n as usize + share
             }
             _ => 0,

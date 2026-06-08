@@ -641,11 +641,9 @@ impl App {
             return false;
         };
 
-        let (last_key, click_count) = self.last_header_click.unwrap_or((sort_key, 0));
-        let click_count = if last_key == sort_key {
-            (click_count + 1) % 3
-        } else {
-            0
+        let click_count = match self.last_header_click {
+            Some((last_key, count)) if last_key == sort_key => (count + 1) % 3,
+            _ => 0,
         };
         self.last_header_click = Some((sort_key, click_count));
 
@@ -1008,7 +1006,10 @@ fn is_ctrl_c(key: KeyEvent) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use ratatui_core::layout::Rect;
 
     use crate::sampler::ProcessRow;
 
@@ -1220,6 +1221,78 @@ mod tests {
             .map(|index| app.snapshot.processes[*index].pid)
             .collect::<Vec<_>>();
         assert_eq!(ordered_pids, vec![1, 2, 3]);
+    }
+
+    fn column_position_for(app: &App, target: SortKey) -> u16 {
+        let widths = crate::ui::column_widths(app.tab, app.table_area.width);
+        let mut position = 0;
+        for (index, width) in widths.iter().enumerate() {
+            if app.column_index_to_sort_key(index) == Some(target) {
+                return (position + width / 2 + 1) as u16;
+            }
+            position += width + 1;
+        }
+        panic!("column for {target:?} not found in {widths:?}");
+    }
+
+    fn header_click(row: u16, column: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn header_click_cycles_desc_asc_then_next_sort_key() {
+        let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+        app.table_area = Rect::new(0, 0, 200, 20);
+        let header_row = app.table_area.y + 1;
+        let memory_column = column_position_for(&app, SortKey::Memory);
+
+        let before = app.sort_key;
+        assert!(
+            app.handle_event(header_click(header_row, memory_column))
+                .unwrap(),
+            "first header click should be a state change"
+        );
+        assert_eq!(app.sort_key, SortKey::Memory);
+        assert!(app.sort_desc);
+
+        assert!(
+            app.handle_event(header_click(header_row, memory_column))
+                .unwrap()
+        );
+        assert_eq!(app.sort_key, SortKey::Memory);
+        assert!(!app.sort_desc);
+
+        assert!(
+            app.handle_event(header_click(header_row, memory_column))
+                .unwrap()
+        );
+        assert_ne!(app.sort_key, SortKey::Memory);
+        assert_ne!(app.sort_key, before);
+    }
+
+    #[test]
+    fn header_click_on_different_column_resets_to_descending() {
+        let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+        app.table_area = Rect::new(0, 0, 200, 20);
+        let header_row = app.table_area.y + 1;
+        let memory_column = column_position_for(&app, SortKey::Memory);
+        let pid_column = column_position_for(&app, SortKey::Pid);
+
+        app.handle_event(header_click(header_row, memory_column))
+            .unwrap();
+        app.handle_event(header_click(header_row, memory_column))
+            .unwrap();
+        assert!(!app.sort_desc);
+
+        app.handle_event(header_click(header_row, pid_column))
+            .unwrap();
+        assert_eq!(app.sort_key, SortKey::Pid);
+        assert!(app.sort_desc);
     }
 
     fn fake_process(template: &ProcessRow, pid: u32, name: &str) -> ProcessRow {

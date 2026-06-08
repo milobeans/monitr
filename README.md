@@ -28,13 +28,13 @@
 Install from crates.io:
 
 ```bash
-cargo install monitr
+cargo install --locked monitr
 ```
 
 Build from source:
 
 ```bash
-cargo install --path .
+cargo install --locked --path .
 ```
 
 Or install into `~/.local/bin` from this checkout:
@@ -110,6 +110,7 @@ monitr inspect 1234 --limit 20
 | `1`-`6`, `Tab` | Switch views |
 | `j`/`k`, arrows | Move selection |
 | `PageUp`/`PageDown`, `Home`/`End` | Jump in the process table |
+| Click column header | Sort by that column: descending, then ascending, then cycle to the next key |
 | `/` | Filter processes |
 | `Ctrl-U` | Clear the active filter from anywhere |
 | `s` | Cycle sort key |
@@ -161,3 +162,11 @@ make check
 ```
 
 This runs formatting, clippy, unit tests, and a release build.
+
+## Releases
+
+Pushes to `main` run CI. A `main` push only publishes a new crate and creates a GitHub Release when `package.version` changes in `Cargo.toml`.
+
+Each release version must be new. crates.io versions are immutable, so bump `Cargo.toml` before pushing a releasable commit.
+
+Set the repository secret `CRATES_IO_TOKEN` in GitHub before relying on the publish job.

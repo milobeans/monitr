@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -35,4 +34,133 @@ jobs:
         if: matrix.toolchain == 'stable'
         env:
           RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
-        run: cargo package
+        run: cargo package --locked
+
+  release:
+    name: Publish crate and GitHub release
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: Detect release version
+        id: version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          current="$(python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+          print(tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"])
+          PY
+          )"
+          previous=""
+          if git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            previous="$(git show "${BEFORE_SHA}:Cargo.toml" | python3 - <<'PY'
+          import sys
+          import tomllib
+          print(tomllib.loads(sys.stdin.read())["package"]["version"])
+          PY
+            )"
+          fi
+          changed=false
+          if [ "${current}" != "${previous}" ]; then
+            changed=true
+          fi
+          echo "current=${current}" >> "${GITHUB_OUTPUT}"
+          echo "previous=${previous}" >> "${GITHUB_OUTPUT}"
+          echo "changed=${changed}" >> "${GITHUB_OUTPUT}"
+
+      - name: Skip release when version is unchanged
+        if: steps.version.outputs.changed != 'true'
+        run: echo "Cargo.toml version unchanged at ${{ steps.version.outputs.current }}; skipping publish and release."
+
+      - name: Validate release state
+        if: steps.version.outputs.changed == 'true'
+        id: release_state
+        env:
+          VERSION: ${{ steps.version.outputs.current }}
+        run: |
+          tag="v${VERSION}"
+          tag_exists=false
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            tag_exists=true
+            tag_commit="$(git rev-list -n 1 "${tag}")"
+            if [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
+              echo "::error::${tag} already points to ${tag_commit}. Bump Cargo.toml before pushing another release."
+              exit 1
+            fi
+          fi
+          published="$(python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["VERSION"]
+          url = f"https://crates.io/api/v1/crates/monitr/{version}"
+          request = urllib.request.Request(url, headers={"User-Agent": "monitr-release-workflow"})
+          try:
+            with urllib.request.urlopen(request) as response:
+              json.load(response)
+          except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+              print("false")
+            else:
+              raise
+          else:
+            print("true")
+          PY
+          )"
+          if [ "${published}" = "true" ] && [ "${tag_exists}" != "true" ]; then
+            echo "::error::monitr ${VERSION} is already published on crates.io, but ${tag} is missing from GitHub."
+            exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "tag_exists=${tag_exists}" >> "${GITHUB_OUTPUT}"
+          echo "published=${published}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify package
+        if: steps.version.outputs.changed == 'true'
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: cargo package --locked
+
+      - name: Ensure crates.io token is configured
+        if: steps.version.outputs.changed == 'true' && steps.release_state.outputs.published != 'true'
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          if [ -z "${CRATES_IO_TOKEN}" ]; then
+            echo "::error::Set the CRATES_IO_TOKEN repository secret before publishing."
+            exit 1
+          fi
+
+      - name: Publish crate
+        if: steps.version.outputs.changed == 'true' && steps.release_state.outputs.published != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          RUSTUP_TOOLCHAIN: stable
+        run: cargo publish --locked
+
+      - name: Create GitHub release
+        if: steps.version.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          tag_name: ${{ steps.release_state.outputs.tag }}
+          target_commitish: ${{ github.sha }}
