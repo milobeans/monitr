@@ -100,6 +100,7 @@ jobs:
           PREVIOUS_VERSION: ${{ steps.version.outputs.previous }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
           import io
@@ -115,6 +116,7 @@ jobs:
           previous_version = os.environ.get("PREVIOUS_VERSION", "")
           github_sha = os.environ["GITHUB_SHA"]
           repository = os.environ["GITHUB_REPOSITORY"]
+          github_token = os.environ.get("GITHUB_TOKEN", "")
           tag = f"v{version}"
 
           def git_output(*args: str) -> str:
@@ -167,13 +169,13 @@ jobs:
 
           release_exists = False
           release_url = f"https://api.github.com/repos/{repository}/releases/tags/{tag}"
-          release_request = urllib.request.Request(
-              release_url,
-              headers={
-                  "Accept": "application/vnd.github+json",
-                  "User-Agent": "monitr-release-workflow",
-              },
-          )
+          release_headers = {
+              "Accept": "application/vnd.github+json",
+              "User-Agent": "monitr-release-workflow",
+          }
+          if github_token:
+              release_headers["Authorization"] = f"Bearer {github_token}"
+          release_request = urllib.request.Request(release_url, headers=release_headers)
           try:
               with urllib.request.urlopen(release_request):
                   release_exists = True
