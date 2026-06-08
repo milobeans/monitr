@@ -15,9 +15,9 @@ use ratatui_widgets::{
 };
 
 use crate::{
-    app::{App, Tab},
+    app::{App, HandlesView, Tab},
     format,
-    sampler::{DiskRow, NetworkRow, ProcessRow, Snapshot},
+    sampler::{DiskRow, NetworkRow, ProcessRow},
 };
 
 const BG: Color = Color::Rgb(12, 14, 16);
@@ -47,12 +47,15 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
 
     render_title(frame, app, layout[0]);
     render_tabs(frame, app, layout[1]);
-    render_overview(frame, app.snapshot(), layout[2]);
+    render_overview(frame, app, layout[2]);
     render_main(frame, app, layout[3]);
     render_footer(frame, app, layout[4]);
 
     if app.show_help {
         render_help(frame, area);
+    }
+    if let Some(view) = app.handles_view() {
+        render_handles(frame, area, view);
     }
 }
 
@@ -135,7 +138,8 @@ fn render_tabs(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(tabs, area);
 }
 
-fn render_overview(frame: &mut Frame<'_>, snapshot: &Snapshot, area: Rect) {
+fn render_overview(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let snapshot = app.snapshot();
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -147,8 +151,9 @@ fn render_overview(frame: &mut Frame<'_>, snapshot: &Snapshot, area: Rect) {
         .split(area);
 
     let cpu_ratio = (snapshot.totals.cpu_usage as f64 / 100.0).clamp(0.0, 1.0);
+    let cpu_spark = app.history().cpu_sparkline(spark_width(chunks[0]));
     let cpu = Gauge::default()
-        .block(metric_block("CPU"))
+        .block(metric_block_with_spark("CPU", &cpu_spark))
         .gauge_style(Style::default().fg(usage_color(snapshot.totals.cpu_usage as f64)))
         .ratio(cpu_ratio)
         .label(format!(
@@ -163,8 +168,9 @@ fn render_overview(frame: &mut Frame<'_>, snapshot: &Snapshot, area: Rect) {
     } else {
         0.0
     };
+    let memory_spark = app.history().memory_sparkline(spark_width(chunks[1]));
     let memory = Gauge::default()
-        .block(metric_block("Memory"))
+        .block(metric_block_with_spark("Memory", &memory_spark))
         .gauge_style(Style::default().fg(usage_color(memory_ratio * 100.0)))
         .ratio(memory_ratio.clamp(0.0, 1.0))
         .label(format!(
@@ -278,6 +284,7 @@ fn process_table_title(app: &App) -> String {
     let base = match app.tab {
         Tab::Disk => "Disk activity by process".to_string(),
         Tab::Network => "Process context | interface totals in inspector".to_string(),
+        Tab::Movers => "Top movers since last sample".to_string(),
         _ => app.tab.title().to_string(),
     };
     if app.visible_count() == 0 && !app.filter.is_empty() {
@@ -417,6 +424,26 @@ fn table_schema(
                 Constraint::Length(10),
             ],
         ),
+        Tab::Movers => (
+            vec![
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header("User", sort_key == crate::app::SortKey::User, sort_desc),
+                sort_header("CPU +/-", sort_key == crate::app::SortKey::Trend, sort_desc),
+                "Mem +/-".to_string(),
+                "Disk +/-".to_string(),
+                "State".to_string(),
+            ],
+            vec![
+                Constraint::Length(7),
+                Constraint::Min(22),
+                Constraint::Length(13),
+                Constraint::Length(9),
+                Constraint::Length(10),
+                Constraint::Length(11),
+                Constraint::Length(10),
+            ],
+        ),
     };
     (headers, widths)
 }
@@ -473,6 +500,15 @@ fn process_row(process: &ProcessRow, tab: Tab) -> Row<'static> {
             right(format::bytes_rate(disk_rate)),
             status,
         ],
+        Tab::Movers => vec![
+            pid,
+            name,
+            user,
+            right(format::signed_percent(process.trend.cpu_delta as f64)),
+            right(format::signed_bytes(process.trend.memory_delta)),
+            right(format::signed_bytes_rate(process.trend.disk_rate_delta())),
+            process.trend.headline().unwrap_or(status),
+        ],
     };
 
     Row::new(cells.into_iter().map(Cell::from).collect::<Vec<_>>())
@@ -502,6 +538,16 @@ fn render_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
             "CPU",
             &format::percent(process.cpu_usage as f64),
         );
+        let trend_width = (area.width as usize).saturating_sub(12).clamp(8, 40);
+        if let Some(spark) = app
+            .history()
+            .process_cpu_sparkline(process.pid, trend_width)
+        {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{:<10}", "CPU trend"), Style::default().fg(MUTED)),
+                Span::styled(spark, Style::default().fg(GREEN)),
+            ]));
+        }
         push_pair(&mut lines, "Memory", &format::bytes(process.memory));
         push_pair(
             &mut lines,
@@ -563,6 +609,33 @@ fn render_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
                     .map(|pid| pid.to_string())
                     .unwrap_or_else(|| "-".to_string()),
             );
+            push_pair(
+                &mut lines,
+                "Priority",
+                &details
+                    .priority
+                    .map(|priority| priority.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            );
+            if details.thread_count.is_none()
+                || details.open_files.is_none()
+                || details.session_id.is_none()
+                || details.priority.is_none()
+            {
+                lines.push(Line::from(Span::styled(
+                    "Some process details are hidden by macOS permissions.",
+                    Style::default().fg(MUTED),
+                )));
+            }
+        } else {
+            push_pair(&mut lines, "Threads", "-");
+            push_pair(&mut lines, "Open files", "-");
+            push_pair(&mut lines, "Session", "-");
+            push_pair(&mut lines, "Priority", "-");
+            lines.push(Line::from(Span::styled(
+                "Process details are unavailable or the process exited.",
+                Style::default().fg(MUTED),
+            )));
         }
         lines.push(Line::from(""));
         push_pair(&mut lines, "Exe", &process.exe);
@@ -684,11 +757,11 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
             "filter: type, Backspace edit, Enter/Esc keep, Ctrl-U clear"
         }
     } else if area.width >= 150 {
-        "1-5/Tab views  j/k move  PgUp/PgDn jump  / filter  Ctrl-U clear  s cycle  S reverse  i inspector  +/- refresh  r resample  ? help  q quit"
+        "1-6/Tab views  j/k move  / filter  s/S sort  i inspector  o files  z/g stop/cont  [] nice  +/- refresh  ? help  q quit"
     } else if area.width >= 110 {
-        "1-5 views  j/k move  / filter  Ctrl-U clear  s/S sort  i inspector  +/- refresh  ? help  q quit"
+        "1-6 views  j/k move  / filter  s/S sort  i inspector  o files  z/g stop/cont  +/- refresh  ? help  q quit"
     } else {
-        "1-5 views  j/k move  / filter  s/S sort  i info  ? help  q quit"
+        "1-6 views  j/k move  / filter  s/S sort  i info  ? help  q quit"
     };
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(" ", Style::default().bg(PANEL)),
@@ -707,22 +780,27 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
             Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("1-5 / Tab        switch category"),
+        Line::from("1-6 / Tab        switch category"),
         Line::from("j/k or arrows    move process selection"),
         Line::from("Page/Home/End    jump through the process table"),
         Line::from("/                filter by name, pid, user, command, or status"),
+        Line::from("                 predicates: cpu>50  mem<100mb  user:milo  name:node"),
         Line::from("Ctrl-U           clear the active filter anywhere"),
         Line::from("s / S            cycle sort key / reverse sort"),
         Line::from(
             "c m e d D n p T u sort CPU, memory, impact, write, read, name, pid, runtime, user",
         ),
         Line::from("i or Enter       show or hide process inspector"),
+        Line::from("o                open files and sockets for the selected process"),
         Line::from("t / f            send TERM / KILL after confirmation"),
+        Line::from("z / g            suspend / resume with STOP / CONT after confirmation"),
+        Line::from("[ / ]            lower / raise process priority by 5 after confirmation"),
         Line::from("+ / -            slower / faster refresh interval"),
         Line::from("r                refresh immediately"),
         Line::from("q, Esc, Ctrl-C  quit"),
         Line::from(""),
         Line::from("Disk and Network inspector panels show system-level volumes/interfaces."),
+        Line::from("Movers shows CPU, memory, and disk-rate changes since the previous sample."),
         Line::from(""),
         Line::from("Press Esc, Enter, ?, or q to close."),
     ];
@@ -736,6 +814,115 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         .style(Style::default().fg(TEXT))
         .wrap(Wrap { trim: true });
     frame.render_widget(help, popup);
+}
+
+fn render_handles(frame: &mut Frame<'_>, area: Rect, view: &HandlesView) {
+    let popup = centered_rect(86, 86, area);
+    frame.render_widget(Clear, popup);
+
+    // Split the available rows between the two sections so a long file list
+    // never crowds out the sockets, with the CLI offered for the full dump.
+    let inner_height = popup.height.saturating_sub(2) as usize;
+    let overhead = 8 + usize::from(view.error.is_some());
+    let per_section = inner_height.saturating_sub(overhead) / 2;
+    let per_section = per_section.max(3);
+    let name_width = (popup.width as usize).saturating_sub(18).clamp(12, 120);
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!("{} ", view.name),
+            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("pid {}", view.pid), Style::default().fg(MUTED)),
+    ])];
+    if let Some(error) = &view.error {
+        lines.push(Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(RED),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(section_header(format!("Sockets ({})", view.sockets.len())));
+    if view.sockets.is_empty() {
+        lines.push(muted_line("none visible"));
+    } else {
+        for socket in view.sockets.iter().take(per_section) {
+            let remote_or_state = socket
+                .remote
+                .as_deref()
+                .or(socket.state.as_deref())
+                .unwrap_or("-");
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{:<5} {:<5} {:<28} {}",
+                    format::truncate_middle(&socket.fd, 5),
+                    socket.protocol,
+                    format::truncate_middle(&socket.local, 28),
+                    remote_or_state,
+                ),
+                Style::default().fg(TEXT),
+            )));
+        }
+        if view.sockets.len() > per_section {
+            lines.push(muted_line(&overflow_hint(
+                view.sockets.len() - per_section,
+                view.pid,
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(section_header(format!("Open files ({})", view.files.len())));
+    if view.files.is_empty() {
+        lines.push(muted_line("none visible"));
+    } else {
+        for file in view.files.iter().take(per_section) {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{:<5} {:<5} {}",
+                    format::truncate_middle(&file.fd, 5),
+                    file.file_type,
+                    format::truncate_middle(&file.name, name_width),
+                ),
+                Style::default().fg(TEXT),
+            )));
+        }
+        if view.files.len() > per_section {
+            lines.push(muted_line(&overflow_hint(
+                view.files.len() - per_section,
+                view.pid,
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(muted_line("Press Esc, Enter, o, or q to close."));
+
+    let panel = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title("Open files & sockets")
+                .borders(Borders::ALL)
+                .style(panel_style()),
+        )
+        .style(Style::default().fg(TEXT));
+    frame.render_widget(panel, popup);
+}
+
+fn section_header(text: String) -> Line<'static> {
+    Line::from(Span::styled(
+        text,
+        Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn muted_line(text: &str) -> Line<'static> {
+    Line::from(Span::styled(text.to_string(), Style::default().fg(MUTED)))
+}
+
+fn overflow_hint(extra: usize, pid: u32) -> String {
+    format!("+{extra} more — run monitr inspect {pid}")
 }
 
 fn push_pair(lines: &mut Vec<Line<'static>>, label: &str, value: &str) {
@@ -752,6 +939,8 @@ fn right(value: String) -> String {
 fn process_style(process: &ProcessRow) -> Style {
     let fg = if process.status == "zombie" || process.status == "dead" {
         RED
+    } else if process.trend.new_process {
+        BLUE
     } else if process.cpu_usage >= 75.0 {
         YELLOW
     } else {
@@ -769,6 +958,24 @@ fn metric_block(title: &'static str) -> Block<'static> {
         .title(title)
         .borders(Borders::ALL)
         .style(panel_style())
+}
+
+fn metric_block_with_spark(title: &str, spark: &str) -> Block<'static> {
+    let heading = if spark.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title} {spark}")
+    };
+    Block::default()
+        .title(heading)
+        .borders(Borders::ALL)
+        .style(panel_style())
+}
+
+/// Glyph budget for a sparkline inside a metric block title, leaving room for
+/// the label, borders, and a little breathing space.
+fn spark_width(area: Rect) -> usize {
+    (area.width as usize).saturating_sub(10).clamp(0, 32)
 }
 
 fn value_style(color: Color) -> Style {

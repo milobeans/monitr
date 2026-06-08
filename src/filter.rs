@@ -1,0 +1,284 @@
+use crate::sampler::ProcessRow;
+
+/// A parsed process filter. The query is split on whitespace into terms that are
+/// ANDed together. Each term is one of:
+///
+/// - a numeric predicate like `cpu>50`, `mem<100mb`, `pid>=1000`
+/// - a field substring like `user:milo`, `name:node`, `status:run`
+/// - a plain substring, matched against the row's precomputed search text
+///
+/// Anything that does not parse as a predicate falls back to a plain substring,
+/// so the simple "just type a word" behavior is preserved.
+#[derive(Debug, Default)]
+pub struct Filter {
+    terms: Vec<Term>,
+}
+
+impl Filter {
+    pub fn parse(raw: &str) -> Self {
+        let terms = raw.split_whitespace().map(Term::parse).collect();
+        Self { terms }
+    }
+
+    pub fn matches(&self, process: &ProcessRow) -> bool {
+        self.terms.iter().all(|term| term.matches(process))
+    }
+}
+
+#[derive(Debug)]
+enum Term {
+    Text(String),
+    Field { field: TextField, needle: String },
+    Numeric { field: NumField, op: Op, value: f64 },
+}
+
+impl Term {
+    fn parse(raw: &str) -> Self {
+        if let Some(term) = parse_numeric(raw) {
+            return term;
+        }
+        if let Some((field, needle)) = raw.split_once(':')
+            && let Some(field) = TextField::parse(field)
+        {
+            return Term::Field {
+                field,
+                needle: needle.to_lowercase(),
+            };
+        }
+        Term::Text(raw.to_lowercase())
+    }
+
+    fn matches(&self, process: &ProcessRow) -> bool {
+        match self {
+            Term::Text(needle) => process.search_text.contains(needle.as_str()),
+            Term::Field { field, needle } => field.value(process).contains(needle.as_str()),
+            Term::Numeric { field, op, value } => op.compare(field.actual(process), *value),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TextField {
+    User,
+    Name,
+    Status,
+    Command,
+    Pid,
+}
+
+impl TextField {
+    fn parse(field: &str) -> Option<Self> {
+        match field.to_lowercase().as_str() {
+            "user" => Some(Self::User),
+            "name" => Some(Self::Name),
+            "status" | "state" => Some(Self::Status),
+            "cmd" | "command" => Some(Self::Command),
+            "pid" => Some(Self::Pid),
+            _ => None,
+        }
+    }
+
+    fn value(self, process: &ProcessRow) -> String {
+        match self {
+            Self::User => process.user.to_lowercase(),
+            // sort_name is already lowercased at sample time.
+            Self::Name => process.sort_name.clone(),
+            Self::Status => process.status.to_lowercase(),
+            Self::Command => process.command.to_lowercase(),
+            Self::Pid => process.pid.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum NumField {
+    Cpu,
+    Mem,
+    Pid,
+}
+
+impl NumField {
+    fn parse(field: &str) -> Option<Self> {
+        match field.to_lowercase().as_str() {
+            "cpu" => Some(Self::Cpu),
+            "mem" | "memory" | "rss" => Some(Self::Mem),
+            "pid" => Some(Self::Pid),
+            _ => None,
+        }
+    }
+
+    fn parse_value(self, raw: &str) -> Option<f64> {
+        match self {
+            Self::Cpu | Self::Pid => raw.trim().parse().ok(),
+            Self::Mem => parse_size(raw),
+        }
+    }
+
+    fn actual(self, process: &ProcessRow) -> f64 {
+        match self {
+            Self::Cpu => process.cpu_usage as f64,
+            Self::Mem => process.memory as f64,
+            Self::Pid => process.pid as f64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Op {
+    Gt,
+    Lt,
+    Ge,
+    Le,
+}
+
+impl Op {
+    fn compare(self, actual: f64, expected: f64) -> bool {
+        match self {
+            Self::Gt => actual > expected,
+            Self::Lt => actual < expected,
+            Self::Ge => actual >= expected,
+            Self::Le => actual <= expected,
+        }
+    }
+}
+
+fn parse_numeric(raw: &str) -> Option<Term> {
+    // Two-character operators are checked first so `>=` is not split as `>`.
+    const OPERATORS: [(&str, Op); 4] =
+        [(">=", Op::Ge), ("<=", Op::Le), (">", Op::Gt), ("<", Op::Lt)];
+    for (token, op) in OPERATORS {
+        let Some(index) = raw.find(token) else {
+            continue;
+        };
+        let field = &raw[..index];
+        let value = &raw[index + token.len()..];
+        if field.is_empty() || value.is_empty() {
+            return None;
+        }
+        let field = NumField::parse(field)?;
+        let value = field.parse_value(value)?;
+        return Some(Term::Numeric { field, op, value });
+    }
+    None
+}
+
+/// Parse a byte size with an optional decimal suffix (`100mb`, `2g`, `512`).
+/// Decimal (1000-based) units match how `format::bytes` displays sizes.
+fn parse_size(raw: &str) -> Option<f64> {
+    let raw = raw.trim().to_lowercase();
+    const SUFFIXES: [(&str, f64); 10] = [
+        ("tb", 1e12),
+        ("gb", 1e9),
+        ("mb", 1e6),
+        ("kb", 1e3),
+        ("t", 1e12),
+        ("g", 1e9),
+        ("m", 1e6),
+        ("k", 1e3),
+        ("b", 1.0),
+        ("", 1.0),
+    ];
+    for (suffix, multiplier) in SUFFIXES {
+        let Some(prefix) = raw.strip_suffix(suffix) else {
+            continue;
+        };
+        let prefix = prefix.trim();
+        if prefix.is_empty() {
+            continue;
+        }
+        if let Ok(number) = prefix.parse::<f64>() {
+            return Some(number * multiplier);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::sampler::{ProcessRow, ProcessTrend};
+
+    use super::Filter;
+
+    fn process(pid: u32, name: &str, user: &str, cpu: f32, memory: u64) -> ProcessRow {
+        let status = "running";
+        ProcessRow {
+            pid,
+            parent_pid: None,
+            name: name.to_string(),
+            sort_name: name.to_lowercase(),
+            user: user.to_string(),
+            command: format!("/usr/bin/{name}"),
+            exe: "-".into(),
+            cwd: "-".into(),
+            status: status.into(),
+            cpu_usage: cpu,
+            memory,
+            virtual_memory: memory,
+            memory_percent: 0.0,
+            disk_read_rate: 0.0,
+            disk_write_rate: 0.0,
+            total_disk_read: 0,
+            total_disk_write: 0,
+            run_time: 0,
+            start_time: 0,
+            energy_impact: 0.0,
+            trend: ProcessTrend::default(),
+            selected_details: None,
+            search_text: format!(
+                "{pid} {} {} /usr/bin/{name} {status}",
+                name.to_lowercase(),
+                user.to_lowercase()
+            ),
+        }
+    }
+
+    #[test]
+    fn plain_substring_still_matches() {
+        let filter = Filter::parse("node");
+        assert!(filter.matches(&process(1, "node", "milo", 1.0, 10)));
+        assert!(!filter.matches(&process(2, "redis", "milo", 1.0, 10)));
+    }
+
+    #[test]
+    fn numeric_predicates_compare_fields() {
+        let busy = Filter::parse("cpu>50");
+        assert!(busy.matches(&process(1, "node", "milo", 75.0, 10)));
+        assert!(!busy.matches(&process(2, "node", "milo", 12.0, 10)));
+
+        let big = Filter::parse("mem>=100mb");
+        assert!(big.matches(&process(1, "node", "milo", 1.0, 200_000_000)));
+        assert!(!big.matches(&process(2, "node", "milo", 1.0, 50_000_000)));
+    }
+
+    #[test]
+    fn field_predicates_scope_the_match() {
+        let mine = Filter::parse("user:milo");
+        assert!(mine.matches(&process(1, "node", "milo", 1.0, 10)));
+        assert!(!mine.matches(&process(2, "node", "root", 1.0, 10)));
+    }
+
+    #[test]
+    fn terms_are_anded_together() {
+        let filter = Filter::parse("cpu>50 user:milo");
+        assert!(filter.matches(&process(1, "node", "milo", 80.0, 10)));
+        // Right user, but not busy enough.
+        assert!(!filter.matches(&process(2, "node", "milo", 5.0, 10)));
+        // Busy, but wrong user.
+        assert!(!filter.matches(&process(3, "node", "root", 80.0, 10)));
+    }
+
+    #[test]
+    fn unparseable_predicate_falls_back_to_substring() {
+        // `cpu` with no operator/value is just a word to search for.
+        let filter = Filter::parse("cpu");
+        assert!(filter.matches(&process(1, "cpuminer", "milo", 1.0, 10)));
+        assert!(!filter.matches(&process(2, "node", "milo", 1.0, 10)));
+    }
+
+    #[test]
+    fn empty_query_matches_everything() {
+        let filter = Filter::parse("   ");
+        assert!(filter.matches(&process(1, "node", "milo", 1.0, 10)));
+        assert!(filter.matches(&process(2, "redis", "root", 99.0, 9_000)));
+    }
+}

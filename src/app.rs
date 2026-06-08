@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui_core::{backend::Backend, terminal::Terminal};
@@ -7,7 +10,12 @@ use sysinfo::Signal;
 
 use crate::{
     error::Result,
-    sampler::{ProcessRow, Sampler, Snapshot},
+    filter::Filter,
+    history::History,
+    inspect::{self, FileEntry, SocketEntry},
+    sampler::{
+        ProcessRow, ProcessSample, Sampler, Snapshot, apply_process_trends, collect_process_samples,
+    },
     ui,
 };
 
@@ -20,15 +28,17 @@ pub enum Tab {
     Energy,
     Disk,
     Network,
+    Movers,
 }
 
 impl Tab {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Cpu,
         Self::Memory,
         Self::Energy,
         Self::Disk,
         Self::Network,
+        Self::Movers,
     ];
 
     pub fn title(self) -> &'static str {
@@ -38,6 +48,7 @@ impl Tab {
             Self::Energy => "Energy",
             Self::Disk => "Disk",
             Self::Network => "Network",
+            Self::Movers => "Movers",
         }
     }
 
@@ -48,6 +59,7 @@ impl Tab {
             Self::Energy => SortKey::Energy,
             Self::Disk => SortKey::DiskWrite,
             Self::Network => SortKey::Name,
+            Self::Movers => SortKey::Trend,
         }
     }
 }
@@ -59,6 +71,7 @@ pub enum SortKey {
     Energy,
     DiskRead,
     DiskWrite,
+    Trend,
     Name,
     Pid,
     User,
@@ -73,6 +86,7 @@ impl SortKey {
             Self::Energy => "Impact",
             Self::DiskRead => "Read/s",
             Self::DiskWrite => "Write/s",
+            Self::Trend => "Change",
             Self::Name => "Name",
             Self::Pid => "PID",
             Self::User => "User",
@@ -112,17 +126,36 @@ impl Notice {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum KillIntent {
-    Term,
-    Kill,
+/// A snapshot of one process's open files and sockets, captured on demand for
+/// the handles overlay. Carries an optional error so permission failures show
+/// in the panel rather than disappearing.
+#[derive(Debug, Clone)]
+pub struct HandlesView {
+    pub pid: u32,
+    pub name: String,
+    pub files: Vec<FileEntry>,
+    pub sockets: Vec<SocketEntry>,
+    pub error: Option<String>,
 }
 
-impl KillIntent {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessIntent {
+    Term,
+    Kill,
+    Stop,
+    Continue,
+    NiceLower,
+    NiceHigher,
+}
+
+impl ProcessIntent {
     fn signal(self) -> Signal {
         match self {
             Self::Term => Signal::Term,
             Self::Kill => Signal::Kill,
+            Self::Stop => Signal::Stop,
+            Self::Continue => Signal::Continue,
+            Self::NiceLower | Self::NiceHigher => unreachable!("renice actions are not signals"),
         }
     }
 
@@ -130,6 +163,34 @@ impl KillIntent {
         match self {
             Self::Term => "TERM",
             Self::Kill => "KILL",
+            Self::Stop => "STOP",
+            Self::Continue => "CONT",
+            Self::NiceLower => "nice +5",
+            Self::NiceHigher => "nice -5",
+        }
+    }
+
+    fn cancel_label(self) -> &'static str {
+        match self {
+            Self::NiceLower | Self::NiceHigher => "priority change cancelled",
+            _ => "process signal cancelled",
+        }
+    }
+
+    fn apply(self, sampler: &Sampler, pid: u32) -> Result<String> {
+        match self {
+            Self::Term | Self::Kill | Self::Stop | Self::Continue => {
+                sampler.send_signal(pid, self.signal())?;
+                Ok(format!("sent {} to pid {}", self.label(), pid))
+            }
+            Self::NiceLower => {
+                let priority = sampler.adjust_priority(pid, 5)?;
+                Ok(format!("set pid {pid} priority to {priority}"))
+            }
+            Self::NiceHigher => {
+                let priority = sampler.adjust_priority(pid, -5)?;
+                Ok(format!("set pid {pid} priority to {priority}"))
+            }
         }
     }
 }
@@ -137,6 +198,8 @@ impl KillIntent {
 pub struct App {
     sampler: Sampler,
     snapshot: Snapshot,
+    previous_samples: HashMap<u32, ProcessSample>,
+    history: History,
     pub table_state: TableState,
     pub visible: Vec<usize>,
     pub tab: Tab,
@@ -147,7 +210,8 @@ pub struct App {
     pub show_details: bool,
     pub show_help: bool,
     pub notice: Option<Notice>,
-    pub confirm: Option<KillIntent>,
+    pub confirm: Option<ProcessIntent>,
+    pub handles: Option<HandlesView>,
     interval: Duration,
     last_refresh: Instant,
     should_quit: bool,
@@ -157,9 +221,14 @@ impl App {
     pub fn new(interval: Duration, initial_filter: Option<String>) -> Result<Self> {
         let mut sampler = Sampler::new()?;
         let snapshot = sampler.sample(None);
+        let previous_samples = collect_process_samples(&snapshot.processes);
+        let mut history = History::default();
+        history.record(&snapshot);
         let mut app = Self {
             sampler,
             snapshot,
+            previous_samples,
+            history,
             table_state: TableState::default(),
             visible: Vec::new(),
             tab: Tab::Cpu,
@@ -171,6 +240,7 @@ impl App {
             show_help: false,
             notice: None,
             confirm: None,
+            handles: None,
             interval,
             last_refresh: Instant::now(),
             should_quit: false,
@@ -210,6 +280,14 @@ impl App {
 
     pub fn snapshot(&self) -> &Snapshot {
         &self.snapshot
+    }
+
+    pub fn history(&self) -> &History {
+        &self.history
+    }
+
+    pub fn handles_view(&self) -> Option<&HandlesView> {
+        self.handles.as_ref()
     }
 
     pub fn selected_process(&self) -> Option<&ProcessRow> {
@@ -254,11 +332,15 @@ impl App {
             self.confirm = None;
             self.filter_mode = false;
             self.show_help = false;
+            self.handles = None;
             return Ok(true);
         }
 
         if self.show_help {
             return Ok(self.handle_help_key(key));
+        }
+        if self.handles.is_some() {
+            return Ok(self.handle_handles_key(key));
         }
         if let Some(intent) = self.confirm {
             return self.handle_confirm_key(key, intent);
@@ -287,6 +369,7 @@ impl App {
                 self.show_details = !self.show_details;
                 true
             }
+            KeyCode::Char('o') => self.toggle_handles(),
             KeyCode::Char('r') => {
                 self.refresh();
                 true
@@ -336,8 +419,12 @@ impl App {
                 self.set_sort(SortKey::User, false);
                 true
             }
-            KeyCode::Char('t') => self.begin_kill(KillIntent::Term),
-            KeyCode::Char('f') => self.begin_kill(KillIntent::Kill),
+            KeyCode::Char('t') => self.begin_action(ProcessIntent::Term),
+            KeyCode::Char('f') => self.begin_action(ProcessIntent::Kill),
+            KeyCode::Char('z') => self.begin_action(ProcessIntent::Stop),
+            KeyCode::Char('g') => self.begin_action(ProcessIntent::Continue),
+            KeyCode::Char('[') => self.begin_action(ProcessIntent::NiceLower),
+            KeyCode::Char(']') => self.begin_action(ProcessIntent::NiceHigher),
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 self.adjust_interval(false);
                 true
@@ -351,6 +438,7 @@ impl App {
             KeyCode::Char('3') => self.set_tab(Tab::Energy),
             KeyCode::Char('4') => self.set_tab(Tab::Disk),
             KeyCode::Char('5') => self.set_tab(Tab::Network),
+            KeyCode::Char('6') => self.set_tab(Tab::Movers),
             KeyCode::Tab => self.next_tab(),
             KeyCode::BackTab => self.previous_tab(),
             KeyCode::Down | KeyCode::Char('j') => self.select_next(1),
@@ -374,17 +462,56 @@ impl App {
         }
     }
 
-    fn handle_confirm_key(&mut self, key: KeyEvent, intent: KillIntent) -> Result<bool> {
+    fn handle_handles_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char('q') => {
+                self.handles = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Toggle the open files/sockets overlay for the selected process. Opening
+    /// runs `lsof` once for the current selection; the result (or a permission
+    /// error) is captured so it stays stable while the panel is open.
+    fn toggle_handles(&mut self) -> bool {
+        if self.handles.is_some() {
+            self.handles = None;
+            return true;
+        }
+        let Some(process) = self.selected_process() else {
+            return false;
+        };
+        let pid = process.pid;
+        let name = process.name.clone();
+        let view = match inspect::collect_handles(pid) {
+            Ok(handles) => HandlesView {
+                pid,
+                name,
+                files: handles.files,
+                sockets: handles.sockets,
+                error: None,
+            },
+            Err(error) => HandlesView {
+                pid,
+                name,
+                files: Vec::new(),
+                sockets: Vec::new(),
+                error: Some(error.to_string()),
+            },
+        };
+        self.handles = Some(view);
+        true
+    }
+
+    fn handle_confirm_key(&mut self, key: KeyEvent, intent: ProcessIntent) -> Result<bool> {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 if let Some(pid) = self.selected_pid() {
-                    match self.sampler.send_signal(pid, intent.signal()) {
-                        Ok(()) => {
-                            self.notice = Some(Notice::new(format!(
-                                "sent {} to pid {}",
-                                intent.label(),
-                                pid
-                            )));
+                    match intent.apply(&self.sampler, pid) {
+                        Ok(message) => {
+                            self.notice = Some(Notice::new(message));
                             self.refresh();
                         }
                         Err(error) => self.notice = Some(Notice::new(error.to_string())),
@@ -395,7 +522,7 @@ impl App {
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 self.confirm = None;
-                self.notice = Some(Notice::new("process signal cancelled"));
+                self.notice = Some(Notice::new(intent.cancel_label()));
                 Ok(true)
             }
             _ => Ok(false),
@@ -431,6 +558,9 @@ impl App {
     fn refresh(&mut self) {
         let selected_pid = self.selected_pid();
         self.snapshot = self.sampler.sample(selected_pid);
+        apply_process_trends(&mut self.snapshot.processes, &self.previous_samples);
+        self.previous_samples = collect_process_samples(&self.snapshot.processes);
+        self.history.record(&self.snapshot);
         self.last_refresh = Instant::now();
         self.rebuild_view(selected_pid);
     }
@@ -451,15 +581,13 @@ impl App {
     }
 
     fn refilter_view(&mut self, selected_pid: Option<u32>) {
-        let filter = self.filter.trim().to_lowercase();
+        let filter = Filter::parse(self.filter.trim());
         self.visible = self
             .snapshot
             .processes
             .iter()
             .enumerate()
-            .filter_map(|(index, process)| {
-                (filter.is_empty() || process.search_text.contains(&filter)).then_some(index)
-            })
+            .filter_map(|(index, process)| filter.matches(process).then_some(index))
             .collect();
 
         if self.visible.is_empty() {
@@ -490,6 +618,7 @@ impl App {
                 SortKey::Energy => left.energy_impact.total_cmp(&right.energy_impact),
                 SortKey::DiskRead => left.disk_read_rate.total_cmp(&right.disk_read_rate),
                 SortKey::DiskWrite => left.disk_write_rate.total_cmp(&right.disk_write_rate),
+                SortKey::Trend => left.trend.score().total_cmp(&right.trend.score()),
                 SortKey::Name => left.sort_name.cmp(&right.sort_name),
                 SortKey::Pid => left.pid.cmp(&right.pid),
                 SortKey::User => left.user.cmp(&right.user),
@@ -541,12 +670,13 @@ impl App {
     }
 
     fn cycle_sort(&mut self) {
-        const ORDER: [SortKey; 9] = [
+        const ORDER: [SortKey; 10] = [
             SortKey::Cpu,
             SortKey::Memory,
             SortKey::Energy,
             SortKey::DiskWrite,
             SortKey::DiskRead,
+            SortKey::Trend,
             SortKey::Name,
             SortKey::Pid,
             SortKey::User,
@@ -561,7 +691,7 @@ impl App {
         self.rebuild_view(self.selected_pid());
     }
 
-    fn begin_kill(&mut self, intent: KillIntent) -> bool {
+    fn begin_action(&mut self, intent: ProcessIntent) -> bool {
         if self.selected_pid().is_some() {
             self.confirm = Some(intent);
             true
@@ -670,7 +800,17 @@ mod tests {
 
     use crate::sampler::ProcessRow;
 
-    use super::{App, SortKey, Tab};
+    use super::{App, HandlesView, ProcessIntent, SortKey, Tab};
+
+    fn open_handles() -> HandlesView {
+        HandlesView {
+            pid: 1,
+            name: "demo".into(),
+            files: Vec::new(),
+            sockets: Vec::new(),
+            error: None,
+        }
+    }
 
     #[test]
     fn ctrl_c_quits_from_filter_mode() {
@@ -724,6 +864,85 @@ mod tests {
         assert!(app.set_tab(Tab::Network));
         assert_eq!(app.sort_key, SortKey::Name);
         assert!(!app.sort_desc);
+
+        assert!(app.set_tab(Tab::Movers));
+        assert_eq!(app.sort_key, SortKey::Trend);
+        assert!(app.sort_desc);
+    }
+
+    #[test]
+    fn power_action_shortcuts_prompt_for_confirmation() {
+        let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+        if app.selected_pid().is_none() {
+            return;
+        }
+
+        assert!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('z'),
+                KeyModifiers::NONE,
+            )))
+            .unwrap()
+        );
+        assert_eq!(app.confirm, Some(ProcessIntent::Stop));
+
+        app.confirm = None;
+        assert!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('g'),
+                KeyModifiers::NONE,
+            )))
+            .unwrap()
+        );
+        assert_eq!(app.confirm, Some(ProcessIntent::Continue));
+
+        app.confirm = None;
+        assert!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('['),
+                KeyModifiers::NONE,
+            )))
+            .unwrap()
+        );
+        assert_eq!(app.confirm, Some(ProcessIntent::NiceLower));
+
+        app.confirm = None;
+        assert!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char(']'),
+                KeyModifiers::NONE,
+            )))
+            .unwrap()
+        );
+        assert_eq!(app.confirm, Some(ProcessIntent::NiceHigher));
+    }
+
+    #[test]
+    fn handles_overlay_captures_keys_and_toggles_closed() {
+        let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+        app.handles = Some(open_handles());
+        let starting_tab = app.tab;
+
+        // While the overlay is open, unrelated keys are swallowed, not acted on.
+        assert!(
+            !app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('1'),
+                KeyModifiers::NONE,
+            )))
+            .unwrap()
+        );
+        assert_eq!(app.tab, starting_tab);
+        assert!(app.handles.is_some());
+
+        // `o` again closes it.
+        assert!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('o'),
+                KeyModifiers::NONE,
+            )))
+            .unwrap()
+        );
+        assert!(app.handles.is_none());
     }
 
     #[test]

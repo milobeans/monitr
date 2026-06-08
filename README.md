@@ -5,15 +5,22 @@
 ## Features
 
 - CPU, Memory, Energy, Disk, and Network views
+- Movers view for CPU, memory, and disk-rate changes since the previous sample, each row annotated with the dominant change
+- Inline CPU and memory sparklines in the overview, plus a per-process CPU trend in the inspector
 - Sortable process table with fast keyboard navigation
-- Process filter by PID, name, user, command, or status
+- Process filter by PID, name, user, command, or status, with `cpu>50`, `mem<100mb`, and `field:value` predicates
 - Inspector panel for the selected process
+- Open files and sockets overlay for the selected process, on demand
 - Disk and Network tabs include system-level volume/interface totals in the inspector
 - CPU, memory, virtual memory, runtime, status, user, parent PID, command, executable, and current working directory
 - Disk read/write rates and totals
 - macOS thread count for the selected process
 - Open file counts where the OS exposes them
 - Confirmed TERM and KILL actions
+- Confirmed suspend, resume, and priority-adjust actions
+- One-shot process snapshots with text or JSON output
+- Port ownership lookup for TCP listeners or all TCP/UDP sockets
+- One-shot process inspection with open files and sockets
 - Small native release binary
 
 ## Install
@@ -56,11 +63,51 @@ Start with a filter:
 monitr --filter codex
 ```
 
+Filters also accept predicates, ANDed together:
+
+```bash
+monitr --filter 'cpu>50 user:milo'
+```
+
+Supported predicates are `cpu`, `mem`, and `pid` with `>`, `<`, `>=`, `<=`
+(memory accepts size suffixes like `100mb`), plus `user:`, `name:`, `status:`,
+`cmd:`, and `pid:` substring fields. Anything else is a plain substring.
+
+Print a one-shot process snapshot:
+
+```bash
+monitr snapshot --limit 20
+```
+
+Print machine-readable JSON for scripts:
+
+```bash
+monitr --json --filter node --limit 10
+```
+
+Find which process owns a listening port:
+
+```bash
+monitr ports 3000
+```
+
+Inspect all TCP/UDP sockets, including established connections:
+
+```bash
+monitr ports --all --json
+```
+
+Inspect one process, including open files and sockets:
+
+```bash
+monitr inspect 1234 --limit 20
+```
+
 ## Controls
 
 | Key | Action |
 | --- | --- |
-| `1`-`5`, `Tab` | Switch views |
+| `1`-`6`, `Tab` | Switch views |
 | `j`/`k`, arrows | Move selection |
 | `PageUp`/`PageDown`, `Home`/`End` | Jump in the process table |
 | `/` | Filter processes |
@@ -69,8 +116,12 @@ monitr --filter codex
 | `S` | Reverse sort direction |
 | `c`, `m`, `e`, `d`, `D`, `n`, `p`, `T`, `u` | Sort by CPU, memory, energy impact, disk write, disk read, name, PID, runtime, user |
 | `i`, `Enter` | Toggle inspector |
+| `o` | Show open files and sockets for the selected process |
 | `t` | Send TERM after confirmation |
 | `f` | Send KILL after confirmation |
+| `z` | Suspend with STOP after confirmation |
+| `g` | Resume with CONT after confirmation |
+| `[` / `]` | Lower / raise process priority by 5 after confirmation |
 | `+` | Slow the refresh interval |
 | `-` | Speed up the refresh interval |
 | `r` | Refresh now |
@@ -83,8 +134,23 @@ monitr --filter codex
 
 - Energy impact is a lightweight estimate based on CPU, memory share, I/O, and run state.
 - Disk and Network tabs keep a process table for context, while the inspector shows system-level volumes or interfaces.
-- Network data is interface-level, not per-process.
+- Network throughput is interface-level, not per-process. The `ports` command identifies socket owners but does not attribute byte counts to each process.
 - Some process details depend on macOS permissions and may show `-` for protected processes.
+
+## Roadmap
+
+The strongest opportunities for `monitr` are features that lean into terminal-native workflows or expose macOS process details that Activity Monitor does not make easy to inspect.
+
+- Per-process network attribution: show bytes in/out and active connections by PID, not only interface-level totals. macOS exposes no cheap syscall for this, so it is deferred to an on-demand path rather than the refresh loop; the `o` overlay and `ports` command already identify socket owners.
+- Better energy and wakeup data: replace the current lightweight energy estimate with richer macOS-specific signals (idle/interrupt wakeups) where public APIs expose them.
+- Longer timeline windows: the history buffer that drives sparklines is in place; extend the Movers view from previous-sample deltas to 10 second, 1 minute, and 5 minute windows on top of it.
+- Wider sparklines: extend the existing CPU/memory sparklines to disk and network, and into the process table when the terminal has room.
+- Record and replay: export sampled sessions as JSON or CSV, then replay or diff them later for performance investigations.
+- Watch rules and alerts: notify when a process exceeds CPU, memory, disk, or network thresholds, or when a matching process spawns, exits, or changes state, including a scriptable `monitr watch` for pipelines.
+- Diagnostic capture: build on `monitr inspect` to collect a targeted report for a process, including process tree, sample/spindump output, and recent metric history.
+- Process tree and rollups: group processes by parent tree, app bundle, launchd service, terminal session, cwd, or git repository.
+- Smarter filtering: build on the new `field:value` and comparison predicates with fuzzy matching, regex, and saved filters.
+- Richer anomaly explanations: the Movers view already names the dominant change per row; extend this to swap churn, dominant disk writers, network spikes, FD exhaustion risk, and short-lived process churn.
 
 ## Development
 

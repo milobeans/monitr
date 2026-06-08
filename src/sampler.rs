@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     ffi::OsStr,
     time::{Duration, Instant},
 };
@@ -59,8 +60,71 @@ pub struct ProcessRow {
     pub run_time: u64,
     pub start_time: u64,
     pub energy_impact: f64,
+    pub trend: ProcessTrend,
     pub selected_details: Option<SelectedProcessDetails>,
     pub search_text: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProcessTrend {
+    pub cpu_delta: f32,
+    pub memory_delta: i64,
+    pub disk_read_rate_delta: f64,
+    pub disk_write_rate_delta: f64,
+    pub new_process: bool,
+}
+
+impl ProcessTrend {
+    pub fn disk_rate_delta(&self) -> f64 {
+        self.disk_read_rate_delta + self.disk_write_rate_delta
+    }
+
+    pub fn score(&self) -> f64 {
+        let memory_mib = self.memory_delta.unsigned_abs() as f64 / 1_048_576.0;
+        let disk_mib = self.disk_rate_delta().abs() / 1_048_576.0;
+        self.cpu_delta.abs() as f64 + memory_mib.min(100.0) + disk_mib.min(100.0)
+    }
+
+    /// A short human explanation of why this process is a mover, naming the
+    /// single dominant driver of change. Returns `None` when nothing changed.
+    pub fn headline(&self) -> Option<String> {
+        if self.new_process {
+            return Some("new process".to_string());
+        }
+
+        let cpu_magnitude = self.cpu_delta.abs() as f64;
+        let memory_mib = self.memory_delta.unsigned_abs() as f64 / 1_048_576.0;
+        let disk_mib = self.disk_rate_delta().abs() / 1_048_576.0;
+
+        if cpu_magnitude.max(memory_mib).max(disk_mib) < 0.05 {
+            return None;
+        }
+
+        if cpu_magnitude >= memory_mib && cpu_magnitude >= disk_mib {
+            Some(format!(
+                "CPU {}",
+                crate::format::signed_percent(self.cpu_delta as f64)
+            ))
+        } else if memory_mib >= disk_mib {
+            Some(format!(
+                "mem {}",
+                crate::format::signed_bytes(self.memory_delta)
+            ))
+        } else {
+            Some(format!(
+                "disk {}",
+                crate::format::signed_bytes_rate(self.disk_rate_delta())
+            ))
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessSample {
+    cpu_usage: f32,
+    memory: u64,
+    disk_read_rate: f64,
+    disk_write_rate: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +133,7 @@ pub struct SelectedProcessDetails {
     pub open_files: Option<usize>,
     pub open_files_limit: Option<usize>,
     pub session_id: Option<u32>,
+    pub priority: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +266,18 @@ impl Sampler {
         }
     }
 
+    pub fn adjust_priority(&self, pid: u32, delta: i32) -> Result<i32> {
+        let sys_pid = Pid::from_u32(pid);
+        self.system
+            .process(sys_pid)
+            .ok_or_else(|| error::message(format!("process {sys_pid} is no longer visible")))?;
+        let current = platform::priority(pid)
+            .ok_or_else(|| error::message(format!("priority is unavailable for pid {pid}")))?;
+        let next = (current + delta).clamp(-20, 20);
+        platform::set_priority(pid, next)?;
+        Ok(next)
+    }
+
     pub fn selected_process_details(&mut self, pid: u32) -> Option<SelectedProcessDetails> {
         let pid = Pid::from_u32(pid);
         self.system.refresh_processes_specifics(
@@ -215,6 +292,7 @@ impl Sampler {
                 open_files: process.open_files(),
                 open_files_limit: process.open_files_limit(),
                 session_id: process.session_id().map(|pid| pid.as_u32()),
+                priority: platform::priority(process.pid().as_u32()),
             })
     }
 
@@ -262,6 +340,7 @@ impl Sampler {
             open_files: process.open_files(),
             open_files_limit: process.open_files_limit(),
             session_id: process.session_id().map(|pid| pid.as_u32()),
+            priority: platform::priority(pid),
         });
         let parent_pid = process.parent().map(|pid| pid.as_u32());
         let status = status_label(process.status()).to_string();
@@ -295,6 +374,7 @@ impl Sampler {
             run_time: process.run_time(),
             start_time: process.start_time(),
             energy_impact,
+            trend: ProcessTrend::default(),
             selected_details,
             search_text,
         }
@@ -347,6 +427,41 @@ impl Sampler {
             })
             .collect();
         (in_rate, out_rate, rows)
+    }
+}
+
+pub fn collect_process_samples(processes: &[ProcessRow]) -> HashMap<u32, ProcessSample> {
+    processes
+        .iter()
+        .map(|process| {
+            (
+                process.pid,
+                ProcessSample {
+                    cpu_usage: process.cpu_usage,
+                    memory: process.memory,
+                    disk_read_rate: process.disk_read_rate,
+                    disk_write_rate: process.disk_write_rate,
+                },
+            )
+        })
+        .collect()
+}
+
+pub fn apply_process_trends(processes: &mut [ProcessRow], previous: &HashMap<u32, ProcessSample>) {
+    for process in processes {
+        process.trend = previous
+            .get(&process.pid)
+            .map(|sample| ProcessTrend {
+                cpu_delta: process.cpu_usage - sample.cpu_usage,
+                memory_delta: process.memory as i64 - sample.memory as i64,
+                disk_read_rate_delta: process.disk_read_rate - sample.disk_read_rate,
+                disk_write_rate_delta: process.disk_write_rate - sample.disk_write_rate,
+                new_process: false,
+            })
+            .unwrap_or_else(|| ProcessTrend {
+                new_process: true,
+                ..ProcessTrend::default()
+            });
     }
 }
 
@@ -467,8 +582,123 @@ mod platform {
         (written == size && info.pti_threadnum >= 0).then_some(info.pti_threadnum as usize)
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn priority(pid: u32) -> Option<i32> {
+        unsafe {
+            *libc::__error() = 0;
+            let value = libc::getpriority(libc::PRIO_PROCESS, pid as libc::id_t);
+            (*libc::__error() == 0).then_some(value)
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn set_priority(pid: u32, priority: i32) -> std::io::Result<()> {
+        let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, pid as libc::id_t, priority) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
     #[cfg(not(target_os = "macos"))]
     pub fn thread_count(_pid: u32) -> Option<usize> {
         None
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn priority(_pid: u32) -> Option<i32> {
+        None
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn set_priority(_pid: u32, _priority: i32) -> std::io::Result<()> {
+        Err(std::io::Error::other(
+            "priority control is not supported on this platform",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProcessRow, ProcessTrend, apply_process_trends, collect_process_samples};
+
+    #[test]
+    fn process_trends_compare_against_previous_sample() {
+        let previous = vec![process(1, 10.0, 1_000, 100.0, 200.0)];
+        let previous = collect_process_samples(&previous);
+        let mut current = vec![
+            process(1, 25.0, 1_500, 250.0, 150.0),
+            process(2, 5.0, 500, 0.0, 0.0),
+        ];
+
+        apply_process_trends(&mut current, &previous);
+
+        assert_eq!(current[0].trend.cpu_delta, 15.0);
+        assert_eq!(current[0].trend.memory_delta, 500);
+        assert_eq!(current[0].trend.disk_read_rate_delta, 150.0);
+        assert_eq!(current[0].trend.disk_write_rate_delta, -50.0);
+        assert!(!current[0].trend.new_process);
+        assert!(current[1].trend.new_process);
+    }
+
+    #[test]
+    fn trend_headline_names_the_dominant_driver() {
+        let new_process = ProcessTrend {
+            new_process: true,
+            ..ProcessTrend::default()
+        };
+        assert_eq!(new_process.headline().as_deref(), Some("new process"));
+
+        let cpu_heavy = ProcessTrend {
+            cpu_delta: 35.0,
+            memory_delta: 1_048_576,
+            ..ProcessTrend::default()
+        };
+        assert_eq!(cpu_heavy.headline().as_deref(), Some("CPU +35.0%"));
+
+        let memory_heavy = ProcessTrend {
+            cpu_delta: 1.0,
+            memory_delta: 200_000_000,
+            ..ProcessTrend::default()
+        };
+        assert_eq!(memory_heavy.headline().as_deref(), Some("mem +200 MB"));
+
+        let idle = ProcessTrend::default();
+        assert_eq!(idle.headline(), None);
+    }
+
+    fn process(
+        pid: u32,
+        cpu_usage: f32,
+        memory: u64,
+        disk_read_rate: f64,
+        disk_write_rate: f64,
+    ) -> ProcessRow {
+        ProcessRow {
+            pid,
+            parent_pid: None,
+            name: format!("process-{pid}"),
+            sort_name: format!("process-{pid}"),
+            user: "user".to_string(),
+            command: "command".to_string(),
+            exe: "-".to_string(),
+            cwd: "-".to_string(),
+            status: "running".to_string(),
+            cpu_usage,
+            memory,
+            virtual_memory: memory,
+            memory_percent: 0.0,
+            disk_read_rate,
+            disk_write_rate,
+            total_disk_read: 0,
+            total_disk_write: 0,
+            run_time: 0,
+            start_time: 0,
+            energy_impact: 0.0,
+            trend: ProcessTrend::default(),
+            selected_details: None,
+            search_text: String::new(),
+        }
     }
 }

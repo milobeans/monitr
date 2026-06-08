@@ -35,6 +35,39 @@ pub fn percent(value: f64) -> String {
     }
 }
 
+pub fn signed_percent(value: f64) -> String {
+    let sign = if value > 0.0 {
+        "+"
+    } else if value < 0.0 {
+        "-"
+    } else {
+        ""
+    };
+    format!("{sign}{}", percent(value.abs()))
+}
+
+pub fn signed_bytes(value: i64) -> String {
+    let sign = if value > 0 {
+        "+"
+    } else if value < 0 {
+        "-"
+    } else {
+        ""
+    };
+    format!("{sign}{}", bytes(value.unsigned_abs()))
+}
+
+pub fn signed_bytes_rate(value: f64) -> String {
+    let sign = if value > 0.0 {
+        "+"
+    } else if value < 0.0 {
+        "-"
+    } else {
+        ""
+    };
+    format!("{sign}{}", bytes_rate(value.abs()))
+}
+
 pub fn number(value: f64) -> String {
     if value >= 100.0 {
         format!("{value:.0}")
@@ -68,6 +101,21 @@ pub fn epoch_time(seconds: u64) -> String {
     format!("{} ago", duration(now.as_secs() - seconds))
 }
 
+/// Render values as a Unicode block sparkline scaled against `max`. Values at
+/// or above `max` render as a full block; empty input yields an empty string.
+pub fn sparkline(values: &[f64], max: f64) -> String {
+    const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let max = max.max(f64::MIN_POSITIVE);
+    values
+        .iter()
+        .map(|value| {
+            let ratio = (value / max).clamp(0.0, 1.0);
+            let level = (ratio * (LEVELS.len() - 1) as f64).round() as usize;
+            LEVELS[level.min(LEVELS.len() - 1)]
+        })
+        .collect()
+}
+
 pub fn truncate_middle(value: &str, width: usize) -> String {
     if value.chars().count() <= width {
         return value.to_string();
@@ -92,7 +140,9 @@ pub fn truncate_middle(value: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{bytes, duration, percent, truncate_middle};
+    use super::{
+        bytes, duration, percent, signed_bytes, signed_percent, sparkline, truncate_middle,
+    };
 
     #[test]
     fn formats_bytes() {
@@ -113,6 +163,23 @@ mod tests {
         assert_eq!(percent(3.456), "3.46%");
         assert_eq!(percent(32.11), "32.1%");
         assert_eq!(percent(120.5), "120%");
+    }
+
+    #[test]
+    fn formats_signed_values() {
+        assert_eq!(signed_percent(3.456), "+3.46%");
+        assert_eq!(signed_percent(-32.11), "-32.1%");
+        assert_eq!(signed_bytes(1_500), "+1.50 KB");
+        assert_eq!(signed_bytes(-1_500), "-1.50 KB");
+    }
+
+    #[test]
+    fn renders_sparkline_against_scale() {
+        assert_eq!(sparkline(&[], 100.0), "");
+        assert_eq!(sparkline(&[0.0, 100.0], 100.0), "▁█");
+        // Values clamp to the scale rather than overflowing the glyph range.
+        assert_eq!(sparkline(&[200.0], 100.0), "█");
+        assert_eq!(sparkline(&[50.0], 100.0), "▅");
     }
 
     #[test]
