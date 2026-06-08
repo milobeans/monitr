@@ -169,4 +169,4 @@ Pushes to `main` run CI. The release job syncs the current `package.version` to 
 
 In practice that means a fresh version bump publishes a new release, and a follow-up fix commit can still publish the same version if the earlier attempt never made it to crates.io. Once a version is already published from an earlier commit, bump `Cargo.toml` before the next releasable push.
 
-Set the repository secret `CRATES_IO_TOKEN` in GitHub before relying on the publish job.
+Set the repository secret `CARGO_REGISTRY_TOKEN` in GitHub before relying on the publish job. The workflow also accepts `CRATES_IO_TOKEN` if you already use that name elsewhere.
