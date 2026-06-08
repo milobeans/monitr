@@ -490,7 +490,7 @@ impl App {
                 SortKey::Energy => left.energy_impact.total_cmp(&right.energy_impact),
                 SortKey::DiskRead => left.disk_read_rate.total_cmp(&right.disk_read_rate),
                 SortKey::DiskWrite => left.disk_write_rate.total_cmp(&right.disk_write_rate),
-                SortKey::Name => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
+                SortKey::Name => left.sort_name.cmp(&right.sort_name),
                 SortKey::Pid => left.pid.cmp(&right.pid),
                 SortKey::User => left.user.cmp(&right.user),
                 SortKey::Runtime => left.run_time.cmp(&right.run_time),
@@ -797,6 +797,7 @@ mod tests {
         let mut process = template.clone();
         process.pid = pid;
         process.name = name.to_string();
+        process.sort_name = name.to_lowercase();
         process.search_text = format!("{pid} {name} user command running");
         process
     }

@@ -42,6 +42,7 @@ pub struct ProcessRow {
     pub pid: u32,
     pub parent_pid: Option<u32>,
     pub name: String,
+    pub sort_name: String,
     pub user: String,
     pub command: String,
     pub exe: String,
@@ -227,6 +228,7 @@ impl Sampler {
         let disk = process.disk_usage();
         let pid = process.pid().as_u32();
         let name = os_to_string(process.name());
+        let sort_name = name.to_lowercase();
         let command = command_line(process);
         let user = process
             .user_id()
@@ -266,7 +268,7 @@ impl Sampler {
         let search_text = format!(
             "{} {} {} {} {}",
             pid,
-            name.to_lowercase(),
+            sort_name,
             user.to_lowercase(),
             command.to_lowercase(),
             status.to_lowercase()
@@ -276,6 +278,7 @@ impl Sampler {
             pid,
             parent_pid,
             name,
+            sort_name,
             user,
             command,
             exe,
