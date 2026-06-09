@@ -28,7 +28,6 @@ const GREEN: Color = Color::Rgb(46, 224, 140);
 const BLUE: Color = Color::Rgb(66, 165, 255);
 const YELLOW: Color = Color::Rgb(255, 198, 46);
 const RED: Color = Color::Rgb(255, 90, 106);
-const GRID: Color = Color::Rgb(96, 115, 152);
 const SUMMARY_GREEN: Color = Color::Rgb(41, 118, 84);
 const SUMMARY_YELLOW: Color = Color::Rgb(173, 145, 45);
 const SUMMARY_RED: Color = Color::Rgb(163, 69, 57);
@@ -1574,7 +1573,6 @@ fn build_usage_chart_lines(
     }
 
     let aligned_values = align_chart_values(values, chart_width);
-    let guide_rows = guide_rows(height);
     let summary_bg = summary_bg_color(current_percent);
     let summary_fg = summary_fg_color(current_percent);
     let summary_fill = filled_rows(current_percent, 100.0, height);
@@ -1585,7 +1583,6 @@ fn build_usage_chart_lines(
             let mut spans = Vec::with_capacity(chart_width + 2);
 
             for value in &aligned_values {
-                let guide = guide_rows.contains(&row);
                 let (ch, style) = match value {
                     Some(v) => {
                         let filled_float = (v / scale_max).clamp(0.0, 1.0) * height as f64;
@@ -1595,32 +1592,16 @@ fn build_usage_chart_lines(
 
                         if row >= height.saturating_sub(full_rows) {
                             let fill = usage_band_color(row, height);
-                            let ch = if guide { '╌' } else { ' ' };
-                            let style = Style::default()
-                                .fg(if guide { GRID } else { fill })
-                                .bg(fill);
-                            (ch, style)
+                            (' ', Style::default().fg(fill).bg(fill))
                         } else if row == partial_row && frac > 0.0 {
                             let fill = usage_band_color(row, height);
                             let ch = partial_block(frac);
                             (ch, Style::default().fg(fill).bg(PANEL_ALT))
                         } else {
-                            let ch = if guide { '╌' } else { ' ' };
-                            let style = Style::default()
-                                .fg(if guide { GRID } else { MUTED })
-                                .bg(PANEL_ALT);
-                            (ch, style)
+                            (' ', Style::default().fg(MUTED).bg(PANEL_ALT))
                         }
                     }
-                    None => {
-                        let ch = if guide { '╌' } else { ' ' };
-                        (
-                            ch,
-                            Style::default()
-                                .fg(if guide { GRID } else { MUTED })
-                                .bg(PANEL_ALT),
-                        )
-                    }
+                    None => (' ', Style::default().fg(MUTED).bg(PANEL_ALT)),
                 };
                 spans.push(Span::styled(ch.to_string(), style));
             }
@@ -1700,21 +1681,6 @@ fn partial_block(frac: f64) -> char {
     }
 }
 
-fn guide_rows(height: usize) -> Vec<usize> {
-    if height <= 1 {
-        return Vec::new();
-    }
-    [0.25, 0.5, 0.75]
-        .into_iter()
-        .map(|ratio| ((1.0 - ratio) * (height.saturating_sub(1)) as f64).round() as usize)
-        .fold(Vec::new(), |mut rows, row| {
-            if !rows.contains(&row) {
-                rows.push(row);
-            }
-            rows
-        })
-}
-
 fn usage_band_color(row: usize, height: usize) -> Color {
     let percent = ((height.saturating_sub(row)) as f64 / height.max(1) as f64) * 100.0;
     usage_color(percent)
@@ -1785,7 +1751,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::{Tab, column_sort_key, column_widths};
+    use super::{Tab, build_usage_chart_lines, column_sort_key, column_widths};
     use crate::app::SortKey;
 
     #[test]
@@ -1808,5 +1774,29 @@ mod tests {
         assert_eq!(column_sort_key(Tab::Disk, 2, 60), Some(SortKey::DiskRead));
         assert_eq!(column_sort_key(Tab::Disk, 3, 60), Some(SortKey::DiskWrite));
         assert_eq!(column_sort_key(Tab::Movers, 2, 60), Some(SortKey::Trend));
+    }
+
+    #[test]
+    fn usage_charts_do_not_render_horizontal_guides() {
+        let lines = build_usage_chart_lines(
+            40,
+            6,
+            &[10.0, 25.0, 50.0, 75.0],
+            100.0,
+            75.0,
+            &[
+                "75%".to_string(),
+                "across".to_string(),
+                "12 Cores".to_string(),
+            ],
+        );
+        let rendered = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!rendered.contains('╌'));
+        assert!(rendered.contains("75%"));
     }
 }
