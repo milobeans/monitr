@@ -1316,27 +1316,37 @@ fn build_usage_chart_lines(
 
             for value in &aligned_values {
                 let guide = guide_rows.contains(&row);
-                let ch = if guide { '╌' } else { ' ' };
-                let style = match value {
-                    Some(value) => {
-                        let filled = filled_rows(*value, scale_max, height);
-                        if row >= height.saturating_sub(filled) {
-                            Style::default()
-                                .fg(if guide {
-                                    GRID
-                                } else {
-                                    usage_band_color(row, height)
-                                })
-                                .bg(usage_band_color(row, height))
+                let (ch, style) = match value {
+                    Some(v) => {
+                        let filled_float =
+                            (v / scale_max).clamp(0.0, 1.0) * height as f64;
+                        let full_rows = filled_float.floor() as usize;
+                        let frac = filled_float.fract();
+                        let partial_row = height.saturating_sub(full_rows + 1);
+
+                        if row >= height.saturating_sub(full_rows) {
+                            let fill = usage_band_color(row, height);
+                            let ch = if guide { '╌' } else { ' ' };
+                            let style = Style::default()
+                                .fg(if guide { GRID } else { fill })
+                                .bg(fill);
+                            (ch, style)
+                        } else if row == partial_row && frac > 0.0 {
+                            let fill = usage_band_color(row, height);
+                            let ch = partial_block(frac);
+                            (ch, Style::default().fg(fill).bg(PANEL_ALT))
                         } else {
-                            Style::default()
+                            let ch = if guide { '╌' } else { ' ' };
+                            let style = Style::default()
                                 .fg(if guide { GRID } else { MUTED })
-                                .bg(PANEL_ALT)
+                                .bg(PANEL_ALT);
+                            (ch, style)
                         }
                     }
-                    None => Style::default()
-                        .fg(if guide { GRID } else { MUTED })
-                        .bg(PANEL_ALT),
+                    None => {
+                        let ch = if guide { '╌' } else { ' ' };
+                        (ch, Style::default().fg(if guide { GRID } else { MUTED }).bg(PANEL_ALT))
+                    }
                 };
                 spans.push(Span::styled(ch.to_string(), style));
             }
@@ -1400,6 +1410,20 @@ fn filled_rows(value: f64, scale_max: f64, height: usize) -> usize {
         return 0;
     }
     ((value / scale_max).clamp(0.0, 1.0) * height as f64).ceil() as usize
+}
+
+fn partial_block(frac: f64) -> char {
+    match (frac * 8.0).ceil() as u8 {
+        0 => ' ',
+        1 => '▁',
+        2 => '▂',
+        3 => '▃',
+        4 => '▄',
+        5 => '▅',
+        6 => '▆',
+        7 => '▇',
+        _ => '█',
+    }
 }
 
 fn guide_rows(height: usize) -> Vec<usize> {
