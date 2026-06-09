@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{format, sampler::Snapshot};
 
@@ -38,9 +38,9 @@ impl History {
     pub fn record(&mut self, snapshot: &Snapshot) {
         self.record_usage(snapshot.totals.cpu_usage as f64, memory_percent(snapshot));
 
-        let mut live_pids: Vec<u32> = Vec::with_capacity(snapshot.processes.len());
+        let mut live_pids: HashSet<u32> = HashSet::with_capacity(snapshot.processes.len());
         for process in &snapshot.processes {
-            live_pids.push(process.pid);
+            live_pids.insert(process.pid);
             self.process_cpu
                 .entry(process.pid)
                 .or_default()
