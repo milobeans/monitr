@@ -700,55 +700,7 @@ impl App {
     }
 
     fn column_index_to_sort_key(&self, index: usize) -> Option<SortKey> {
-        match self.tab {
-            Tab::Cpu => match index {
-                0 => Some(SortKey::Pid),
-                1 => Some(SortKey::Name),
-                2 => Some(SortKey::User),
-                3 => Some(SortKey::Cpu),
-                4 => Some(SortKey::Memory),
-                5 => Some(SortKey::Runtime),
-                _ => None,
-            },
-            Tab::Memory => match index {
-                0 => Some(SortKey::Pid),
-                1 => Some(SortKey::Name),
-                2 => Some(SortKey::User),
-                3 => Some(SortKey::Memory),
-                _ => None,
-            },
-            Tab::Energy => match index {
-                0 => Some(SortKey::Pid),
-                1 => Some(SortKey::Name),
-                2 => Some(SortKey::User),
-                3 => Some(SortKey::Energy),
-                4 => Some(SortKey::Cpu),
-                _ => None,
-            },
-            Tab::Disk => match index {
-                0 => Some(SortKey::Pid),
-                1 => Some(SortKey::Name),
-                2 => Some(SortKey::User),
-                3 => Some(SortKey::DiskRead),
-                4 => Some(SortKey::DiskWrite),
-                _ => None,
-            },
-            Tab::Network => match index {
-                0 => Some(SortKey::Pid),
-                1 => Some(SortKey::Name),
-                2 => Some(SortKey::User),
-                3 => Some(SortKey::Cpu),
-                4 => Some(SortKey::Memory),
-                _ => None,
-            },
-            Tab::Movers => match index {
-                0 => Some(SortKey::Pid),
-                1 => Some(SortKey::Name),
-                2 => Some(SortKey::User),
-                3 => Some(SortKey::Trend),
-                _ => None,
-            },
-        }
+        ui::column_sort_key(self.tab, index, self.table_area.width)
     }
 
     fn scroll_inspector(&mut self, amount: usize) -> bool {
@@ -924,6 +876,10 @@ impl App {
             self.confirm = Some(intent);
             true
         } else {
+            self.notice = Some(Notice::new(format!(
+                "no process selected for {}",
+                intent.label()
+            )));
             false
         }
     }
@@ -1160,6 +1116,28 @@ mod tests {
     }
 
     #[test]
+    fn power_action_shortcuts_notice_when_no_process_is_selected() {
+        let mut app = App::new(
+            std::time::Duration::from_millis(1_000),
+            Some("__no_such_process__".into()),
+        )
+        .unwrap();
+
+        assert!(
+            !app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('t'),
+                KeyModifiers::NONE,
+            )))
+            .unwrap()
+        );
+        assert_eq!(app.confirm, None);
+        assert_eq!(
+            app.notice.as_ref().map(|notice| notice.text()),
+            Some("no process selected for TERM")
+        );
+    }
+
+    #[test]
     fn handles_overlay_captures_keys_and_toggles_closed() {
         let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
         app.handles = Some(open_handles());
@@ -1256,7 +1234,7 @@ mod tests {
         let widths = crate::ui::column_widths(app.tab, app.table_area.width);
         let mut position = 0;
         for (index, width) in widths.iter().enumerate() {
-            if app.column_index_to_sort_key(index) == Some(target) {
+            if crate::ui::column_sort_key(app.tab, index, app.table_area.width) == Some(target) {
                 return (position + width / 2 + 1) as u16;
             }
             position += width + 1;

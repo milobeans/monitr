@@ -32,6 +32,7 @@ const GRID: Color = Color::Rgb(96, 115, 152);
 const SUMMARY_GREEN: Color = Color::Rgb(41, 118, 84);
 const SUMMARY_YELLOW: Color = Color::Rgb(173, 145, 45);
 const SUMMARY_RED: Color = Color::Rgb(163, 69, 57);
+const COMPACT_TABLE_WIDTH: u16 = 96;
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
@@ -289,7 +290,9 @@ fn render_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     app.table_area = area;
 
-    let (headers, widths) = table_schema(app.tab, app.sort_key, app.sort_desc);
+    let compact = compact_table(area.width);
+    let (headers, widths) =
+        table_schema_for_width(app.tab, app.sort_key, app.sort_desc, area.width);
     let header = Row::new(headers.iter().cloned().map(Cell::from).collect::<Vec<_>>())
         .style(
             Style::default()
@@ -303,7 +306,7 @@ fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .visible
         .iter()
         .filter_map(|index| app.snapshot().processes.get(*index))
-        .map(|process| process_row(process, app.tab))
+        .map(|process| process_row(process, app.tab, compact))
         .collect::<Vec<_>>();
 
     let title = process_table_title(app);
@@ -364,11 +367,16 @@ fn render_stateful_table(
     frame.render_stateful_widget(table, area, state);
 }
 
-fn table_schema(
+fn table_schema_for_width(
     tab: Tab,
     sort_key: crate::app::SortKey,
     sort_desc: bool,
+    area_width: u16,
 ) -> (Vec<String>, Vec<Constraint>) {
+    if compact_table(area_width) {
+        return compact_table_schema(tab, sort_key, sort_desc);
+    }
+
     let (headers, widths) = match tab {
         Tab::Cpu => (
             vec![
@@ -503,7 +511,7 @@ fn table_schema(
 }
 
 pub fn column_widths(tab: Tab, area_width: u16) -> Vec<usize> {
-    let (_, constraints) = table_schema(tab, crate::app::SortKey::Pid, true);
+    let (_, constraints) = table_schema_for_width(tab, crate::app::SortKey::Pid, true, area_width);
     let inner_width = area_width.saturating_sub(2) as usize;
     let spacing = constraints.len().saturating_sub(1);
     let fixed: usize = constraints
@@ -540,7 +548,14 @@ pub fn column_widths(tab: Tab, area_width: u16) -> Vec<usize> {
         .collect()
 }
 
-fn process_row(process: &ProcessRow, tab: Tab) -> Row<'static> {
+pub fn column_sort_key(tab: Tab, index: usize, area_width: u16) -> Option<crate::app::SortKey> {
+    if compact_table(area_width) {
+        return compact_column_sort_key(tab, index);
+    }
+    full_column_sort_key(tab, index)
+}
+
+fn process_row(process: &ProcessRow, tab: Tab, compact: bool) -> Row<'static> {
     let pid = right(process.pid.to_string(), 7);
     let name = format::truncate_middle(&process.name, 64);
     let user = process.user.clone();
@@ -558,79 +573,334 @@ fn process_row(process: &ProcessRow, tab: Tab) -> Row<'static> {
     let cpu_trend = trend_arrow(process.trend.cpu_delta as f64);
     let mem_trend = trend_arrow(process.trend.memory_delta as f64);
 
-    let cells = match tab {
-        Tab::Cpu => vec![
-            Cell::from(pid),
-            Cell::from(name),
-            Cell::from(user),
-            Cell::from(format!(
-                "{}{}",
-                right(format::percent(process.cpu_usage as f64), 7),
-                cpu_trend
-            ))
-            .style(Style::default().fg(usage_color(process.cpu_usage as f64))),
-            Cell::from(format!(
-                "{}{}",
-                right(format::bytes(process.memory), 9),
-                mem_trend
-            )),
-            Cell::from(right(format::duration(process.run_time), 9)),
-            Cell::from(status),
-        ],
-        Tab::Memory => vec![
-            Cell::from(pid),
-            Cell::from(name),
-            Cell::from(user),
-            memory_cell,
-            Cell::from(right(format::percent(process.memory_percent), 7)),
-            Cell::from(right(format::bytes(process.virtual_memory), 9)),
-            Cell::from(status),
-        ],
-        Tab::Energy => vec![
-            Cell::from(pid),
-            Cell::from(name),
-            Cell::from(user),
-            Cell::from(right(format::number(process.energy_impact), 7)),
-            cpu_cell,
-            Cell::from(right(format::bytes_rate(disk_rate), 9)),
-            Cell::from(status),
-        ],
-        Tab::Disk => vec![
-            Cell::from(pid),
-            Cell::from(name),
-            Cell::from(user),
-            Cell::from(right(format::bytes_rate(process.disk_read_rate), 9)),
-            Cell::from(right(format::bytes_rate(process.disk_write_rate), 9)),
-            Cell::from(right(format::bytes(process.total_disk_read), 9)),
-            Cell::from(right(format::bytes(process.total_disk_write), 9)),
-        ],
-        Tab::Network => vec![
-            Cell::from(pid),
-            Cell::from(name),
-            Cell::from(user),
-            cpu_cell,
-            memory_cell,
-            Cell::from(right(format::bytes_rate(disk_rate), 9)),
-            Cell::from(status),
-        ],
-        Tab::Movers => vec![
-            Cell::from(pid),
-            Cell::from(name),
-            Cell::from(user),
-            Cell::from(right(
-                format::signed_percent(process.trend.cpu_delta as f64),
-                8,
-            )),
-            Cell::from(right(format::signed_bytes(process.trend.memory_delta), 9)),
-            Cell::from(right(
-                format::signed_bytes_rate(process.trend.disk_rate_delta()),
-                10,
-            )),
-            Cell::from(process.trend.headline().unwrap_or(status)),
-        ],
+    let cells = if compact {
+        compact_process_cells(process, tab, &pid, &name, &status, disk_rate)
+    } else {
+        match tab {
+            Tab::Cpu => vec![
+                Cell::from(pid),
+                Cell::from(name),
+                Cell::from(user),
+                Cell::from(format!(
+                    "{}{}",
+                    right(format::percent(process.cpu_usage as f64), 7),
+                    cpu_trend
+                ))
+                .style(Style::default().fg(usage_color(process.cpu_usage as f64))),
+                Cell::from(format!(
+                    "{}{}",
+                    right(format::bytes(process.memory), 9),
+                    mem_trend
+                )),
+                Cell::from(right(format::duration(process.run_time), 9)),
+                Cell::from(status),
+            ],
+            Tab::Memory => vec![
+                Cell::from(pid),
+                Cell::from(name),
+                Cell::from(user),
+                memory_cell,
+                Cell::from(right(format::percent(process.memory_percent), 7)),
+                Cell::from(right(format::bytes(process.virtual_memory), 9)),
+                Cell::from(status),
+            ],
+            Tab::Energy => vec![
+                Cell::from(pid),
+                Cell::from(name),
+                Cell::from(user),
+                Cell::from(right(format::number(process.energy_impact), 7)),
+                cpu_cell,
+                Cell::from(right(format::bytes_rate(disk_rate), 9)),
+                Cell::from(status),
+            ],
+            Tab::Disk => vec![
+                Cell::from(pid),
+                Cell::from(name),
+                Cell::from(user),
+                Cell::from(right(format::bytes_rate(process.disk_read_rate), 9)),
+                Cell::from(right(format::bytes_rate(process.disk_write_rate), 9)),
+                Cell::from(right(format::bytes(process.total_disk_read), 9)),
+                Cell::from(right(format::bytes(process.total_disk_write), 9)),
+            ],
+            Tab::Network => vec![
+                Cell::from(pid),
+                Cell::from(name),
+                Cell::from(user),
+                cpu_cell,
+                memory_cell,
+                Cell::from(right(format::bytes_rate(disk_rate), 9)),
+                Cell::from(status),
+            ],
+            Tab::Movers => vec![
+                Cell::from(pid),
+                Cell::from(name),
+                Cell::from(user),
+                Cell::from(right(
+                    format::signed_percent(process.trend.cpu_delta as f64),
+                    8,
+                )),
+                Cell::from(right(format::signed_bytes(process.trend.memory_delta), 9)),
+                Cell::from(right(
+                    format::signed_bytes_rate(process.trend.disk_rate_delta()),
+                    10,
+                )),
+                Cell::from(process.trend.headline().unwrap_or(status)),
+            ],
+        }
     };
 
     Row::new(cells).style(process_style(process)).height(1)
+}
+
+fn compact_process_cells(
+    process: &ProcessRow,
+    tab: Tab,
+    pid: &str,
+    name: &str,
+    status: &str,
+    disk_rate: f64,
+) -> Vec<Cell<'static>> {
+    match tab {
+        Tab::Cpu => vec![
+            Cell::from(pid.to_string()),
+            Cell::from(name.to_string()),
+            Cell::from(right(format::percent(process.cpu_usage as f64), 7))
+                .style(Style::default().fg(usage_color(process.cpu_usage as f64))),
+            Cell::from(right(format::bytes(process.memory), 8)),
+            Cell::from(status.to_string()),
+        ],
+        Tab::Memory => vec![
+            Cell::from(pid.to_string()),
+            Cell::from(name.to_string()),
+            Cell::from(right(format::bytes(process.memory), 8)),
+            Cell::from(right(format::percent(process.memory_percent), 6)),
+            Cell::from(status.to_string()),
+        ],
+        Tab::Energy => vec![
+            Cell::from(pid.to_string()),
+            Cell::from(name.to_string()),
+            Cell::from(right(format::number(process.energy_impact), 7)),
+            Cell::from(right(format::percent(process.cpu_usage as f64), 7)),
+            Cell::from(status.to_string()),
+        ],
+        Tab::Disk => vec![
+            Cell::from(pid.to_string()),
+            Cell::from(name.to_string()),
+            Cell::from(right(format::bytes_rate(process.disk_read_rate), 8)),
+            Cell::from(right(format::bytes_rate(process.disk_write_rate), 8)),
+        ],
+        Tab::Network => vec![
+            Cell::from(pid.to_string()),
+            Cell::from(name.to_string()),
+            Cell::from(right(format::percent(process.cpu_usage as f64), 7)),
+            Cell::from(right(format::bytes_rate(disk_rate), 8)),
+            Cell::from(status.to_string()),
+        ],
+        Tab::Movers => vec![
+            Cell::from(pid.to_string()),
+            Cell::from(name.to_string()),
+            Cell::from(right(
+                format::signed_percent(process.trend.cpu_delta as f64),
+                7,
+            )),
+            Cell::from(right(format::signed_bytes(process.trend.memory_delta), 8)),
+            Cell::from(
+                process
+                    .trend
+                    .headline()
+                    .unwrap_or_else(|| status.to_string()),
+            ),
+        ],
+    }
+}
+
+fn compact_table_schema(
+    tab: Tab,
+    sort_key: crate::app::SortKey,
+    sort_desc: bool,
+) -> (Vec<String>, Vec<Constraint>) {
+    match tab {
+        Tab::Cpu => (
+            vec![
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header("% CPU", sort_key == crate::app::SortKey::Cpu, sort_desc),
+                sort_header("Mem", sort_key == crate::app::SortKey::Memory, sort_desc),
+                "State".to_string(),
+            ],
+            compact_widths(&[6, 0, 8, 9, 8]),
+        ),
+        Tab::Memory => (
+            vec![
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header("Mem", sort_key == crate::app::SortKey::Memory, sort_desc),
+                "%Mem".to_string(),
+                "State".to_string(),
+            ],
+            compact_widths(&[6, 0, 9, 7, 8]),
+        ),
+        Tab::Energy => (
+            vec![
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header("Impact", sort_key == crate::app::SortKey::Energy, sort_desc),
+                sort_header("% CPU", sort_key == crate::app::SortKey::Cpu, sort_desc),
+                "State".to_string(),
+            ],
+            compact_widths(&[6, 0, 8, 8, 8]),
+        ),
+        Tab::Disk => (
+            vec![
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header(
+                    "Read/s",
+                    sort_key == crate::app::SortKey::DiskRead,
+                    sort_desc,
+                ),
+                sort_header(
+                    "Write/s",
+                    sort_key == crate::app::SortKey::DiskWrite,
+                    sort_desc,
+                ),
+            ],
+            compact_widths(&[6, 0, 9, 9]),
+        ),
+        Tab::Network => (
+            vec![
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header("% CPU", sort_key == crate::app::SortKey::Cpu, sort_desc),
+                "Disk/s".to_string(),
+                "State".to_string(),
+            ],
+            compact_widths(&[6, 0, 8, 9, 8]),
+        ),
+        Tab::Movers => (
+            vec![
+                sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
+                sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
+                sort_header("CPU +/-", sort_key == crate::app::SortKey::Trend, sort_desc),
+                "Mem +/-".to_string(),
+                "State".to_string(),
+            ],
+            compact_widths(&[6, 0, 8, 9, 10]),
+        ),
+    }
+}
+
+fn compact_widths(widths: &[u16]) -> Vec<Constraint> {
+    widths
+        .iter()
+        .map(|width| {
+            if *width == 0 {
+                Constraint::Min(12)
+            } else {
+                Constraint::Length(*width)
+            }
+        })
+        .collect()
+}
+
+fn compact_table(area_width: u16) -> bool {
+    area_width < COMPACT_TABLE_WIDTH
+}
+
+fn compact_column_sort_key(tab: Tab, index: usize) -> Option<crate::app::SortKey> {
+    match tab {
+        Tab::Cpu => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::Cpu),
+            3 => Some(crate::app::SortKey::Memory),
+            _ => None,
+        },
+        Tab::Memory => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::Memory),
+            _ => None,
+        },
+        Tab::Energy => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::Energy),
+            3 => Some(crate::app::SortKey::Cpu),
+            _ => None,
+        },
+        Tab::Disk => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::DiskRead),
+            3 => Some(crate::app::SortKey::DiskWrite),
+            _ => None,
+        },
+        Tab::Network => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::Cpu),
+            _ => None,
+        },
+        Tab::Movers => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::Trend),
+            _ => None,
+        },
+    }
+}
+
+fn full_column_sort_key(tab: Tab, index: usize) -> Option<crate::app::SortKey> {
+    match tab {
+        Tab::Cpu => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::User),
+            3 => Some(crate::app::SortKey::Cpu),
+            4 => Some(crate::app::SortKey::Memory),
+            5 => Some(crate::app::SortKey::Runtime),
+            _ => None,
+        },
+        Tab::Memory => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::User),
+            3 => Some(crate::app::SortKey::Memory),
+            _ => None,
+        },
+        Tab::Energy => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::User),
+            3 => Some(crate::app::SortKey::Energy),
+            4 => Some(crate::app::SortKey::Cpu),
+            _ => None,
+        },
+        Tab::Disk => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::User),
+            3 => Some(crate::app::SortKey::DiskRead),
+            4 => Some(crate::app::SortKey::DiskWrite),
+            _ => None,
+        },
+        Tab::Network => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::User),
+            3 => Some(crate::app::SortKey::Cpu),
+            4 => Some(crate::app::SortKey::Memory),
+            _ => None,
+        },
+        Tab::Movers => match index {
+            0 => Some(crate::app::SortKey::Pid),
+            1 => Some(crate::app::SortKey::Name),
+            2 => Some(crate::app::SortKey::User),
+            3 => Some(crate::app::SortKey::Trend),
+            _ => None,
+        },
+    }
 }
 
 fn colored_value_cell(text: &str, value: f64, width: usize) -> Cell<'static> {
@@ -1318,8 +1588,7 @@ fn build_usage_chart_lines(
                 let guide = guide_rows.contains(&row);
                 let (ch, style) = match value {
                     Some(v) => {
-                        let filled_float =
-                            (v / scale_max).clamp(0.0, 1.0) * height as f64;
+                        let filled_float = (v / scale_max).clamp(0.0, 1.0) * height as f64;
                         let full_rows = filled_float.floor() as usize;
                         let frac = filled_float.fract();
                         let partial_row = height.saturating_sub(full_rows + 1);
@@ -1345,7 +1614,12 @@ fn build_usage_chart_lines(
                     }
                     None => {
                         let ch = if guide { '╌' } else { ' ' };
-                        (ch, Style::default().fg(if guide { GRID } else { MUTED }).bg(PANEL_ALT))
+                        (
+                            ch,
+                            Style::default()
+                                .fg(if guide { GRID } else { MUTED })
+                                .bg(PANEL_ALT),
+                        )
                     }
                 };
                 spans.push(Span::styled(ch.to_string(), style));
@@ -1507,4 +1781,32 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         ])
         .split(vertical[1]);
     horizontal[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Tab, column_sort_key, column_widths};
+    use crate::app::SortKey;
+
+    #[test]
+    fn compact_table_widths_fit_narrow_panes() {
+        for tab in Tab::ALL {
+            let widths = column_widths(tab, 60);
+            let spacing = widths.len().saturating_sub(1);
+            assert!(
+                widths.iter().sum::<usize>() + spacing <= 58,
+                "{tab:?} compact widths overflowed: {widths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn compact_table_columns_keep_primary_sort_targets() {
+        assert_eq!(column_sort_key(Tab::Cpu, 2, 60), Some(SortKey::Cpu));
+        assert_eq!(column_sort_key(Tab::Memory, 2, 60), Some(SortKey::Memory));
+        assert_eq!(column_sort_key(Tab::Energy, 2, 60), Some(SortKey::Energy));
+        assert_eq!(column_sort_key(Tab::Disk, 2, 60), Some(SortKey::DiskRead));
+        assert_eq!(column_sort_key(Tab::Disk, 3, 60), Some(SortKey::DiskWrite));
+        assert_eq!(column_sort_key(Tab::Movers, 2, 60), Some(SortKey::Trend));
+    }
 }

@@ -559,7 +559,7 @@ fn enter_terminal() -> Result<CrosstermTerminal> {
         return Err(error.into());
     }
     let backend = CrosstermBackend::new(BufWriter::new(io::stdout()));
-    let mut terminal = match Terminal::new(backend) {
+    let terminal = match Terminal::new(backend) {
         Ok(terminal) => terminal,
         Err(error) => {
             let _ = disable_raw_mode();
@@ -567,10 +567,6 @@ fn enter_terminal() -> Result<CrosstermTerminal> {
             return Err(error.into());
         }
     };
-    if let Err(error) = terminal.clear() {
-        let _ = restore_terminal(&mut terminal);
-        return Err(error.into());
-    }
     Ok(terminal)
 }
 
