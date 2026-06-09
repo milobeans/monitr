@@ -116,8 +116,8 @@ monitr inspect 1234 --limit 20
 | `s` | Cycle sort key |
 | `S` | Reverse sort direction |
 | `c`, `m`, `e`, `d`, `D`, `n`, `p`, `T`, `u` | Sort by CPU, memory, energy impact, disk write, disk read, name, PID, runtime, user |
-| `i`, `Enter` | Toggle inspector |
-| `o` | Show open files and sockets for the selected process |
+| `i` | Toggle inspector |
+| `Enter` | Show open files and sockets for the selected process |
 | `t` | Send TERM after confirmation |
 | `f` | Send KILL after confirmation |
 | `z` | Suspend with STOP after confirmation |

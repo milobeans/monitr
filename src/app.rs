@@ -386,13 +386,13 @@ impl App {
                         self.filter_mode = true;
                         true
                     }
-                    KeyCode::Char('i') | KeyCode::Enter => {
+                    KeyCode::Char('i') => {
                         self.show_details = !self.show_details;
                         self.inspector_scroll = 0;
                         true
                     }
-                    KeyCode::Char('o') => self.toggle_handles(),
-                    KeyCode::Char('O') => {
+                    KeyCode::Enter => self.toggle_handles(),
+                    KeyCode::Char('o') => {
                         self.overview_visible = !self.overview_visible;
                         true
                     }

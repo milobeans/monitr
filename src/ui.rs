@@ -946,9 +946,12 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
             sep.clone(),
             Span::styled("i", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
             Span::styled(" inspect ", Style::default().fg(MUTED)),
-            Span::styled("o", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Enter",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" files ", Style::default().fg(MUTED)),
-            Span::styled("O", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+            Span::styled("o", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
             Span::styled(" overview", Style::default().fg(MUTED)),
             sep.clone(),
             Span::styled(
@@ -1025,10 +1028,10 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         "c m e d D n p T u",
         "sort CPU, memory, impact, write, read, name, pid, runtime, user"
     );
-    add_help_line!("i or Enter", "show or hide process inspector");
-    add_help_line!("O", "show or hide the overview panel");
+    add_help_line!("i", "show or hide process inspector");
+    add_help_line!("o", "show or hide the overview panel");
     add_help_line!("Ctrl-J / Ctrl-K", "scroll the inspector panel");
-    add_help_line!("o", "open files and sockets for the selected process");
+    add_help_line!("Enter", "open files and sockets for the selected process");
     add_help_line!("t / f", "send TERM / KILL after confirmation");
     add_help_line!(
         "z / g",
