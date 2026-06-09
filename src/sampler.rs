@@ -22,6 +22,12 @@ pub struct Snapshot {
 }
 
 #[derive(Debug, Clone)]
+pub struct UsageSample {
+    pub cpu_usage: f32,
+    pub memory_percent: f64,
+}
+
+#[derive(Debug, Clone)]
 pub struct SystemTotals {
     pub cpu_usage: f32,
     pub cpu_count: usize,
@@ -245,6 +251,27 @@ impl Sampler {
             disks,
             networks,
             sample_span,
+        }
+    }
+
+    pub fn sample_usage(&mut self) -> UsageSample {
+        let now = Instant::now();
+        self.last_sample = now;
+
+        self.system
+            .refresh_cpu_specifics(CpuRefreshKind::nothing().with_cpu_usage());
+        self.system.refresh_memory();
+
+        let total_memory = self.system.total_memory();
+        let memory_percent = if total_memory > 0 {
+            self.system.used_memory() as f64 / total_memory as f64 * 100.0
+        } else {
+            0.0
+        };
+
+        UsageSample {
+            cpu_usage: self.system.global_cpu_usage(),
+            memory_percent,
         }
     }
 

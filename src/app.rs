@@ -17,7 +17,8 @@ use crate::{
     history::History,
     inspect::{self, FileEntry, SocketEntry},
     sampler::{
-        ProcessRow, ProcessSample, Sampler, Snapshot, apply_process_trends, collect_process_samples,
+        ProcessRow, ProcessSample, Sampler, Snapshot, UsageSample, apply_process_trends,
+        collect_process_samples,
     },
     ui,
 };
@@ -197,6 +198,7 @@ impl ProcessIntent {
 
 pub struct App {
     sampler: Sampler,
+    overview_sampler: Sampler,
     snapshot: Snapshot,
     previous_samples: HashMap<u32, ProcessSample>,
     history: History,
@@ -220,18 +222,21 @@ pub struct App {
     sort_dirty: bool,
     interval: Duration,
     last_refresh: Instant,
+    last_overview_refresh: Instant,
     should_quit: bool,
 }
 
 impl App {
     pub fn new(interval: Duration, initial_filter: Option<String>) -> Result<Self> {
         let mut sampler = Sampler::new()?;
+        let overview_sampler = Sampler::new()?;
         let snapshot = sampler.sample(None);
         let previous_samples = collect_process_samples(&snapshot.processes);
         let mut history = History::default();
         history.record(&snapshot);
         let mut app = Self {
             sampler,
+            overview_sampler,
             snapshot,
             previous_samples,
             history,
@@ -255,6 +260,7 @@ impl App {
             sort_dirty: true,
             interval,
             last_refresh: Instant::now(),
+            last_overview_refresh: Instant::now(),
             should_quit: false,
         };
         app.rebuild_view(None);
@@ -284,6 +290,9 @@ impl App {
 
             if self.last_refresh.elapsed() >= self.interval {
                 self.refresh();
+                needs_draw = true;
+            } else if self.last_overview_refresh.elapsed() >= self.overview_interval() {
+                self.refresh_overview();
                 needs_draw = true;
             }
         }
@@ -764,8 +773,18 @@ impl App {
         self.previous_samples = collect_process_samples(&self.snapshot.processes);
         self.history.record(&self.snapshot);
         self.last_refresh = Instant::now();
+        self.last_overview_refresh = self.last_refresh;
         self.sort_dirty = true;
         self.rebuild_view(selected_pid);
+    }
+
+    fn refresh_overview(&mut self) {
+        let UsageSample {
+            cpu_usage,
+            memory_percent,
+        } = self.overview_sampler.sample_usage();
+        self.history.record_usage(cpu_usage as f64, memory_percent);
+        self.last_overview_refresh = Instant::now();
     }
 
     fn clear_filter(&mut self) -> bool {
@@ -983,10 +1002,20 @@ impl App {
 
     fn next_poll_timeout(&self) -> Duration {
         let refresh = self.interval.saturating_sub(self.last_refresh.elapsed());
+        let overview = self
+            .overview_interval()
+            .saturating_sub(self.last_overview_refresh.elapsed());
         self.notice
             .as_ref()
             .map(Notice::remaining)
-            .map_or(refresh, |notice| refresh.min(notice))
+            .map_or(refresh.min(overview), |notice| {
+                refresh.min(overview).min(notice)
+            })
+    }
+
+    fn overview_interval(&self) -> Duration {
+        let millis = self.interval.as_millis().max(1) as u64;
+        Duration::from_millis((millis / 2).max(1))
     }
 
     fn clear_expired_notice(&mut self) -> bool {

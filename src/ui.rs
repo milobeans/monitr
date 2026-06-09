@@ -188,7 +188,7 @@ fn render_overview(frame: &mut Frame<'_>, app: &App, area: Rect) {
         frame,
         chunks[0],
         "CPU",
-        &app.history().cpu_recent(chart_width(chunks[0])),
+        &app.history().cpu_recent(chart_width(chunks[0]) * 2),
         100.0,
         snapshot.totals.cpu_usage as f64,
         &[
@@ -207,7 +207,7 @@ fn render_overview(frame: &mut Frame<'_>, app: &App, area: Rect) {
         frame,
         chunks[1],
         "Memory",
-        &app.history().memory_recent(chart_width(chunks[1])),
+        &app.history().memory_recent(chart_width(chunks[1]) * 2),
         100.0,
         memory_ratio * 100.0,
         &[
@@ -1296,11 +1296,12 @@ fn build_usage_chart_lines(
 ) -> Vec<Line<'static>> {
     let summary_width = (width / 3).clamp(10, 14).min(width.saturating_sub(6));
     let chart_width = width.saturating_sub(summary_width + 1);
-    if chart_width < 6 || summary_width == 0 {
+    let bar_count = chart_width / 2;
+    if bar_count < 3 || summary_width == 0 {
         return vec![Line::from(center_text(width, &summary_lines.join(" | ")))];
     }
 
-    let aligned_values = align_chart_values(values, chart_width);
+    let aligned_values = align_chart_values(values, bar_count);
     let guide_rows = guide_rows(height);
     let summary_bg = summary_bg_color(current_percent);
     let summary_fg = summary_fg_color(current_percent);
@@ -1311,12 +1312,23 @@ fn build_usage_chart_lines(
         .map(|row| {
             let mut spans = Vec::with_capacity(chart_width + 2);
 
-            for value in &aligned_values {
+            for column in 0..chart_width {
                 let guide = guide_rows.contains(&row);
+                if column % 2 == 1 {
+                    spans.push(Span::styled(
+                        if guide { "╌" } else { " " },
+                        Style::default()
+                            .fg(if guide { GRID } else { MUTED })
+                            .bg(PANEL_ALT),
+                    ));
+                    continue;
+                }
+
+                let value = aligned_values.get(column / 2).and_then(|value| *value);
                 let ch = if guide { '╌' } else { ' ' };
                 let style = match value {
                     Some(value) => {
-                        let filled = filled_rows(*value, scale_max, height);
+                        let filled = filled_rows(value, scale_max, height);
                         if row >= height.saturating_sub(filled) {
                             Style::default()
                                 .fg(if guide {
@@ -1378,10 +1390,24 @@ fn build_usage_chart_lines(
 
 fn align_chart_values(values: &[f64], width: usize) -> Vec<Option<f64>> {
     let mut aligned = vec![None; width];
+    if width == 0 || values.is_empty() {
+        return aligned;
+    }
+
+    let sample_width = width.saturating_mul(2).min(values.len());
+    let start = values.len().saturating_sub(sample_width);
+    let window = &values[start..];
+    let offset = (window.len().saturating_sub(1)) % 2;
+    let sampled = window
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| (index % 2 == offset).then_some(*value))
+        .collect::<Vec<_>>();
+
     for (slot, value) in aligned
         .iter_mut()
         .rev()
-        .zip(values.iter().rev().take(width))
+        .zip(sampled.iter().rev().take(width))
     {
         *slot = Some(*value);
     }

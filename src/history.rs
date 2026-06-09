@@ -36,8 +36,7 @@ pub struct History {
 
 impl History {
     pub fn record(&mut self, snapshot: &Snapshot) {
-        self.cpu.push(snapshot.totals.cpu_usage as f64);
-        self.memory.push(memory_percent(snapshot));
+        self.record_usage(snapshot.totals.cpu_usage as f64, memory_percent(snapshot));
 
         let mut live_pids: Vec<u32> = Vec::with_capacity(snapshot.processes.len());
         for process in &snapshot.processes {
@@ -49,6 +48,11 @@ impl History {
         }
 
         self.process_cpu.retain(|pid, _| live_pids.contains(pid));
+    }
+
+    pub fn record_usage(&mut self, cpu_usage: f64, memory_percent: f64) {
+        self.cpu.push(cpu_usage);
+        self.memory.push(memory_percent);
     }
 
     pub fn cpu_recent(&self, width: usize) -> Vec<f64> {
@@ -149,6 +153,15 @@ mod tests {
 
         assert_eq!(history.cpu_recent(8), vec![0.0, 100.0]);
         assert_eq!(history.memory_recent(8), vec![0.0, 100.0]);
+    }
+
+    #[test]
+    fn records_usage_without_process_state() {
+        let mut history = History::default();
+        history.record_usage(25.0, 40.0);
+
+        assert_eq!(history.cpu_recent(8), vec![25.0]);
+        assert_eq!(history.memory_recent(8), vec![40.0]);
     }
 
     #[test]
