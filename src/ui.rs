@@ -1304,6 +1304,7 @@ fn build_usage_chart_lines(
     let guide_rows = guide_rows(height);
     let summary_bg = summary_bg_color(current_percent);
     let summary_fg = summary_fg_color(current_percent);
+    let summary_fill = filled_rows(current_percent, 100.0, height);
     let summary_start = height.saturating_sub(summary_lines.len()) / 2;
 
     (0..height)
@@ -1337,7 +1338,18 @@ fn build_usage_chart_lines(
                 spans.push(Span::styled(ch.to_string(), style));
             }
 
-            spans.push(Span::styled("│", Style::default().fg(MUTED).bg(summary_bg)));
+            let summary_filled = row >= height.saturating_sub(summary_fill);
+            let summary_row_bg = if summary_filled {
+                summary_bg
+            } else {
+                PANEL_ALT
+            };
+            let summary_row_fg = if summary_filled { summary_fg } else { TEXT };
+
+            spans.push(Span::styled(
+                "│",
+                Style::default().fg(MUTED).bg(summary_row_bg),
+            ));
 
             let summary_index = row.checked_sub(summary_start);
             let is_headline = summary_index == Some(0);
@@ -1351,11 +1363,11 @@ fn build_usage_chart_lines(
                 );
             let summary_style = if is_headline {
                 Style::default()
-                    .fg(summary_fg)
-                    .bg(summary_bg)
+                    .fg(summary_row_fg)
+                    .bg(summary_row_bg)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(summary_fg).bg(summary_bg)
+                Style::default().fg(summary_row_fg).bg(summary_row_bg)
             };
             spans.push(Span::styled(text, summary_style));
 
