@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::sampler::{ProcessRow, SelectedProcessDetails};
+use crate::sampler::ProcessRow;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProcessRecord {

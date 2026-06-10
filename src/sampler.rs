@@ -688,7 +688,7 @@ fn energy_impact(cpu: f32, memory_percent: f64, io_rate: f64, status: ProcessSta
 }
 
 mod platform {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, process::Command};
 
     #[cfg(target_os = "macos")]
     pub fn thread_count(pid: u32) -> Option<usize> {
@@ -759,7 +759,7 @@ mod platform {
                     "nettop exited with status {}",
                     output.status.code().map_or_else(
                         || "signal".to_string(),
-                        |code| code.to_string()
+                        |code: i32| code.to_string()
                     )
                 ))
             } else {

@@ -9,7 +9,7 @@ use crate::{
     error::{self, Result},
     format,
     process_record::ProcessRecord,
-    sampler::{ProcessRow, Sampler},
+    sampler::Sampler,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
