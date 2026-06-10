@@ -8,6 +8,7 @@ use serde::Serialize;
 use crate::{
     error::{self, Result},
     format,
+    process_record::ProcessRecord,
     sampler::{ProcessRow, Sampler},
 };
 
@@ -34,29 +35,7 @@ pub struct ProcessHandles {
     pub sockets: Vec<SocketEntry>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct InspectProcess {
-    pub pid: u32,
-    pub parent_pid: Option<u32>,
-    pub name: String,
-    pub user: String,
-    pub command: String,
-    pub executable: String,
-    pub cwd: String,
-    pub status: String,
-    pub cpu_usage_percent: f32,
-    pub memory_bytes: u64,
-    pub virtual_memory_bytes: u64,
-    pub disk_read_bytes_per_sec: f64,
-    pub disk_write_bytes_per_sec: f64,
-    pub runtime_seconds: u64,
-    pub energy_impact: f64,
-    pub thread_count: Option<usize>,
-    pub open_files: Option<usize>,
-    pub open_files_limit: Option<usize>,
-    pub session_id: Option<u32>,
-    pub priority: Option<i32>,
-}
+pub type InspectProcess = ProcessRecord;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FileEntry {
@@ -121,9 +100,40 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
         format::duration(process.runtime_seconds),
         format::number(process.energy_impact),
     );
+    let _ = writeln!(
+        out,
+        "Network In {} | Out {}",
+        process
+            .network_in_bytes_per_sec
+            .map(|value| format::bytes_rate(value))
+            .unwrap_or_else(|| "-".to_string()),
+        process
+            .network_out_bytes_per_sec
+            .map(|value| format::bytes_rate(value))
+            .unwrap_or_else(|| "-".to_string()),
+    );
     let _ = writeln!(out, "cwd: {}", process.cwd);
     let _ = writeln!(out, "exe: {}", process.executable);
     let _ = writeln!(out, "cmd: {}", process.command);
+    if process.total_network_read_bytes.is_none() && process.total_network_written_bytes.is_none() {
+        let _ = writeln!(
+            out,
+            "Total network traffic unavailable at process level in this sample"
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "Total Network In {} | Out {}",
+            process
+                .total_network_read_bytes
+                .map(|value| format::bytes(value))
+                .unwrap_or_else(|| "-".to_string()),
+            process
+                .total_network_written_bytes
+                .map(|value| format::bytes(value))
+                .unwrap_or_else(|| "-".to_string()),
+        );
+    }
 
     let _ = writeln!(out);
     let _ = writeln!(out, "Sockets");
@@ -165,33 +175,6 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
     Ok(out)
 }
 
-impl From<&ProcessRow> for InspectProcess {
-    fn from(process: &ProcessRow) -> Self {
-        let details = process.selected_details.as_ref();
-        Self {
-            pid: process.pid,
-            parent_pid: process.parent_pid,
-            name: process.name.clone(),
-            user: process.user.clone(),
-            command: process.command.clone(),
-            executable: process.exe.clone(),
-            cwd: process.cwd.clone(),
-            status: process.status.clone(),
-            cpu_usage_percent: process.cpu_usage,
-            memory_bytes: process.memory,
-            virtual_memory_bytes: process.virtual_memory,
-            disk_read_bytes_per_sec: process.disk_read_rate,
-            disk_write_bytes_per_sec: process.disk_write_rate,
-            runtime_seconds: process.run_time,
-            energy_impact: process.energy_impact,
-            thread_count: details.and_then(|details| details.thread_count),
-            open_files: details.and_then(|details| details.open_files),
-            open_files_limit: details.and_then(|details| details.open_files_limit),
-            session_id: details.and_then(|details| details.session_id),
-            priority: details.and_then(|details| details.priority),
-        }
-    }
-}
 
 pub fn collect_handles(pid: u32) -> Result<ProcessHandles> {
     let output = Command::new("lsof")

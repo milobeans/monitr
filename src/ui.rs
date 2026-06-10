@@ -470,18 +470,18 @@ fn table_schema_for_width(
                 sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
                 sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
                 sort_header("User", sort_key == crate::app::SortKey::User, sort_desc),
+                sort_header("Net In", sort_key == crate::app::SortKey::NetworkIn, sort_desc),
+                sort_header("Net Out", sort_key == crate::app::SortKey::NetworkOut, sort_desc),
                 sort_header("% CPU", sort_key == crate::app::SortKey::Cpu, sort_desc),
-                sort_header("Memory", sort_key == crate::app::SortKey::Memory, sort_desc),
-                "Disk/s".to_string(),
                 "Status".to_string(),
             ],
             vec![
                 Constraint::Length(7),
                 Constraint::Min(22),
                 Constraint::Length(13),
+                Constraint::Length(10),
+                Constraint::Length(10),
                 Constraint::Length(8),
-                Constraint::Length(10),
-                Constraint::Length(10),
                 Constraint::Length(10),
             ],
         ),
@@ -571,6 +571,14 @@ fn process_row(process: &ProcessRow, tab: Tab, compact: bool) -> Row<'static> {
 
     let cpu_trend = trend_arrow(process.trend.cpu_delta as f64);
     let mem_trend = trend_arrow(process.trend.memory_delta as f64);
+    let network_in = process
+        .network_in_rate
+        .map(|value| format::bytes_rate(value))
+        .unwrap_or_else(|| "-".to_string());
+    let network_out = process
+        .network_out_rate
+        .map(|value| format::bytes_rate(value))
+        .unwrap_or_else(|| "-".to_string());
 
     let cells = if compact {
         compact_process_cells(process, tab, &pid, &name, &status, disk_rate)
@@ -625,9 +633,9 @@ fn process_row(process: &ProcessRow, tab: Tab, compact: bool) -> Row<'static> {
                 Cell::from(pid),
                 Cell::from(name),
                 Cell::from(user),
+                Cell::from(right(network_in, 9)),
+                Cell::from(right(network_out, 9)),
                 cpu_cell,
-                memory_cell,
-                Cell::from(right(format::bytes_rate(disk_rate), 9)),
                 Cell::from(status),
             ],
             Tab::Movers => vec![
@@ -691,8 +699,20 @@ fn compact_process_cells(
         Tab::Network => vec![
             Cell::from(pid.to_string()),
             Cell::from(name.to_string()),
-            Cell::from(right(format::percent(process.cpu_usage as f64), 7)),
-            Cell::from(right(format::bytes_rate(disk_rate), 8)),
+            Cell::from(right(
+                process
+                    .network_in_rate
+                    .map(|value| format::bytes_rate(value))
+                    .unwrap_or_else(|| "-".to_string()),
+                9,
+            )),
+            Cell::from(right(
+                process
+                    .network_out_rate
+                    .map(|value| format::bytes_rate(value))
+                    .unwrap_or_else(|| "-".to_string()),
+                9,
+            )),
             Cell::from(status.to_string()),
         ],
         Tab::Movers => vec![
@@ -727,7 +747,7 @@ fn compact_table_schema(
                 sort_header("Mem", sort_key == crate::app::SortKey::Memory, sort_desc),
                 "State".to_string(),
             ],
-            compact_widths(&[6, 0, 8, 9, 8]),
+            compact_widths(&[6, 0, 9, 9, 8]),
         ),
         Tab::Memory => (
             vec![
@@ -770,11 +790,11 @@ fn compact_table_schema(
             vec![
                 sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
                 sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
-                sort_header("% CPU", sort_key == crate::app::SortKey::Cpu, sort_desc),
-                "Disk/s".to_string(),
+                sort_header("Net In", sort_key == crate::app::SortKey::NetworkIn, sort_desc),
+                sort_header("Net Out", sort_key == crate::app::SortKey::NetworkOut, sort_desc),
                 "State".to_string(),
             ],
-            compact_widths(&[6, 0, 8, 9, 8]),
+            compact_widths(&[6, 0, 9, 9, 8]),
         ),
         Tab::Movers => (
             vec![
@@ -838,7 +858,8 @@ fn compact_column_sort_key(tab: Tab, index: usize) -> Option<crate::app::SortKey
         Tab::Network => match index {
             0 => Some(crate::app::SortKey::Pid),
             1 => Some(crate::app::SortKey::Name),
-            2 => Some(crate::app::SortKey::Cpu),
+            2 => Some(crate::app::SortKey::NetworkIn),
+            3 => Some(crate::app::SortKey::NetworkOut),
             _ => None,
         },
         Tab::Movers => match index {
@@ -888,8 +909,9 @@ fn full_column_sort_key(tab: Tab, index: usize) -> Option<crate::app::SortKey> {
             0 => Some(crate::app::SortKey::Pid),
             1 => Some(crate::app::SortKey::Name),
             2 => Some(crate::app::SortKey::User),
-            3 => Some(crate::app::SortKey::Cpu),
-            4 => Some(crate::app::SortKey::Memory),
+            3 => Some(crate::app::SortKey::NetworkIn),
+            4 => Some(crate::app::SortKey::NetworkOut),
+            5 => Some(crate::app::SortKey::Cpu),
             _ => None,
         },
         Tab::Movers => match index {
@@ -1319,7 +1341,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         Style::default().fg(TEXT),
     )));
     lines.push(Line::from(Span::styled(
-        "Movers shows CPU, memory, and disk-rate changes since the previous sample.",
+        "Movers shows CPU, memory, disk, and network changes since the previous sample.",
         Style::default().fg(TEXT),
     )));
     lines.push(Line::from(""));
@@ -1773,6 +1795,8 @@ mod tests {
         assert_eq!(column_sort_key(Tab::Energy, 2, 60), Some(SortKey::Energy));
         assert_eq!(column_sort_key(Tab::Disk, 2, 60), Some(SortKey::DiskRead));
         assert_eq!(column_sort_key(Tab::Disk, 3, 60), Some(SortKey::DiskWrite));
+        assert_eq!(column_sort_key(Tab::Network, 2, 60), Some(SortKey::NetworkIn));
+        assert_eq!(column_sort_key(Tab::Network, 3, 60), Some(SortKey::NetworkOut));
         assert_eq!(column_sort_key(Tab::Movers, 2, 60), Some(SortKey::Trend));
     }
 

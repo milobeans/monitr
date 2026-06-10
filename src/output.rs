@@ -6,6 +6,7 @@ use crate::{
     error::Result,
     filter::Filter,
     format,
+    process_record::ProcessRecord,
     sampler::{DiskRow, NetworkRow, ProcessRow, Snapshot, SystemTotals},
 };
 
@@ -105,7 +106,7 @@ struct SnapshotDocument<'a> {
     shown_process_count: usize,
     filter: Option<&'a str>,
     totals: TotalsDocument<'a>,
-    processes: Vec<ProcessDocument<'a>>,
+    processes: Vec<ProcessDocument>,
     disks: Vec<DiskDocument<'a>>,
     networks: Vec<NetworkDocument<'a>>,
 }
@@ -144,6 +145,8 @@ struct TotalsDocument<'a> {
     disk_write_bytes_per_sec: f64,
     network_in_bytes_per_sec: f64,
     network_out_bytes_per_sec: f64,
+    process_network_supported: bool,
+    process_network_error: Option<&'a str>,
 }
 
 impl<'a> TotalsDocument<'a> {
@@ -162,78 +165,44 @@ impl<'a> TotalsDocument<'a> {
             disk_write_bytes_per_sec: totals.disk_write_rate,
             network_in_bytes_per_sec: totals.net_in_rate,
             network_out_bytes_per_sec: totals.net_out_rate,
+            process_network_supported: totals.process_network_supported,
+            process_network_error: totals.process_network_error.as_deref(),
         }
     }
 }
 
 #[derive(Serialize)]
-struct ProcessDocument<'a> {
-    pid: u32,
-    parent_pid: Option<u32>,
-    name: &'a str,
-    user: &'a str,
-    command: &'a str,
-    executable: &'a str,
-    cwd: &'a str,
-    status: &'a str,
-    cpu_usage_percent: f32,
-    memory_bytes: u64,
-    virtual_memory_bytes: u64,
-    memory_percent: f64,
-    disk_read_bytes_per_sec: f64,
-    disk_write_bytes_per_sec: f64,
-    total_disk_read_bytes: u64,
-    total_disk_written_bytes: u64,
-    runtime_seconds: u64,
-    start_time_unix: u64,
-    energy_impact: f64,
+struct ProcessDocument {
+    #[serde(flatten)]
+    process: ProcessRecord,
     cpu_delta_percent: f32,
     memory_delta_bytes: i64,
     disk_read_delta_bytes_per_sec: f64,
     disk_write_delta_bytes_per_sec: f64,
+    network_in_delta_bytes_per_sec: Option<f64>,
+    network_out_delta_bytes_per_sec: Option<f64>,
+    total_network_read_bytes: Option<u64>,
+    total_network_written_bytes: Option<u64>,
     change_score: f64,
     new_process: bool,
-    thread_count: Option<usize>,
-    open_files: Option<usize>,
-    open_files_limit: Option<usize>,
-    session_id: Option<u32>,
-    priority: Option<i32>,
 }
 
-impl<'a> ProcessDocument<'a> {
-    fn new(process: &'a ProcessRow) -> Self {
-        let details = process.selected_details.as_ref();
+impl ProcessDocument {
+    fn new(process: &ProcessRow) -> Self {
         Self {
-            pid: process.pid,
-            parent_pid: process.parent_pid,
-            name: &process.name,
-            user: &process.user,
-            command: &process.command,
-            executable: &process.exe,
-            cwd: &process.cwd,
-            status: &process.status,
-            cpu_usage_percent: process.cpu_usage,
-            memory_bytes: process.memory,
-            virtual_memory_bytes: process.virtual_memory,
-            memory_percent: process.memory_percent,
-            disk_read_bytes_per_sec: process.disk_read_rate,
-            disk_write_bytes_per_sec: process.disk_write_rate,
-            total_disk_read_bytes: process.total_disk_read,
-            total_disk_written_bytes: process.total_disk_write,
-            runtime_seconds: process.run_time,
-            start_time_unix: process.start_time,
-            energy_impact: process.energy_impact,
+            process: ProcessRecord::from(process),
             cpu_delta_percent: process.trend.cpu_delta,
             memory_delta_bytes: process.trend.memory_delta,
             disk_read_delta_bytes_per_sec: process.trend.disk_read_rate_delta,
             disk_write_delta_bytes_per_sec: process.trend.disk_write_rate_delta,
+            network_in_delta_bytes_per_sec: Some(process.trend.network_in_rate_delta)
+                .filter(|_| process.network_in_rate.is_some()),
+            network_out_delta_bytes_per_sec: Some(process.trend.network_out_rate_delta)
+                .filter(|_| process.network_out_rate.is_some()),
+            total_network_read_bytes: process.total_network_in,
+            total_network_written_bytes: process.total_network_out,
             change_score: process.trend.score(),
             new_process: process.trend.new_process,
-            thread_count: details.and_then(|details| details.thread_count),
-            open_files: details.and_then(|details| details.open_files),
-            open_files_limit: details.and_then(|details| details.open_files_limit),
-            session_id: details.and_then(|details| details.session_id),
-            priority: details.and_then(|details| details.priority),
         }
     }
 }
@@ -304,6 +273,8 @@ mod tests {
                 disk_write_rate: 2.0,
                 net_in_rate: 3.0,
                 net_out_rate: 4.0,
+                process_network_supported: false,
+                process_network_error: None,
                 uptime: 99,
                 host: "host".into(),
                 os: "macOS".into(),

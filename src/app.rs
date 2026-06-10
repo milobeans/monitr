@@ -75,6 +75,8 @@ pub enum SortKey {
     Energy,
     DiskRead,
     DiskWrite,
+    NetworkIn,
+    NetworkOut,
     Trend,
     Name,
     Pid,
@@ -90,6 +92,8 @@ impl SortKey {
             Self::Energy => "Impact",
             Self::DiskRead => "Read/s",
             Self::DiskWrite => "Write/s",
+            Self::NetworkIn => "In/s",
+            Self::NetworkOut => "Out/s",
             Self::Trend => "Change",
             Self::Name => "Name",
             Self::Pid => "PID",
@@ -795,6 +799,14 @@ impl App {
                 SortKey::Energy => left.energy_impact.total_cmp(&right.energy_impact),
                 SortKey::DiskRead => left.disk_read_rate.total_cmp(&right.disk_read_rate),
                 SortKey::DiskWrite => left.disk_write_rate.total_cmp(&right.disk_write_rate),
+                SortKey::NetworkIn => left
+                    .network_in_rate
+                    .unwrap_or(0.0)
+                    .total_cmp(&right.network_in_rate.unwrap_or(0.0)),
+                SortKey::NetworkOut => left
+                    .network_out_rate
+                    .unwrap_or(0.0)
+                    .total_cmp(&right.network_out_rate.unwrap_or(0.0)),
                 SortKey::Trend => left.trend.score().total_cmp(&right.trend.score()),
                 SortKey::Name => left.sort_name.cmp(&right.sort_name),
                 SortKey::Pid => left.pid.cmp(&right.pid),
@@ -849,12 +861,14 @@ impl App {
     }
 
     fn cycle_sort(&mut self) {
-        const ORDER: [SortKey; 10] = [
+        const ORDER: [SortKey; 12] = [
             SortKey::Cpu,
             SortKey::Memory,
             SortKey::Energy,
             SortKey::DiskWrite,
             SortKey::DiskRead,
+            SortKey::NetworkIn,
+            SortKey::NetworkOut,
             SortKey::Trend,
             SortKey::Name,
             SortKey::Pid,

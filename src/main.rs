@@ -4,6 +4,7 @@ mod filter;
 mod format;
 mod history;
 mod inspect;
+mod process_record;
 mod output;
 mod ports;
 mod sampler;
