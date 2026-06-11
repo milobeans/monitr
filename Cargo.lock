@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "monitr"
-version = "0.3.40"
+version = "0.3.41"
 dependencies = [
  "crossterm",
  "libc",
