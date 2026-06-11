@@ -1,6 +1,7 @@
 use std::{
     fmt::Write as _,
     process::{Command, Output},
+    time::Duration,
 };
 
 use serde::Serialize;
@@ -17,6 +18,7 @@ pub struct InspectOptions {
     pub pid: u32,
     pub json: bool,
     pub limit: usize,
+    pub full: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,9 +56,16 @@ pub struct SocketEntry {
     pub state: Option<String>,
 }
 
-pub fn inspect(options: InspectOptions) -> Result<Inspection> {
+pub fn inspect(options: InspectOptions, interval: Duration) -> Result<Inspection> {
     let mut sampler = Sampler::new()?;
-    let snapshot = sampler.sample(Some(options.pid));
+    let baseline = sampler.sample(Some(options.pid));
+    let previous = crate::sampler::collect_process_samples(&baseline.processes);
+    
+    std::thread::sleep(interval);
+    
+    let mut snapshot = sampler.sample(Some(options.pid));
+    crate::sampler::apply_process_trends(&mut snapshot.processes, &previous);
+    
     let process = snapshot
         .processes
         .iter()
@@ -80,9 +89,13 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
     let process = &inspection.process;
     let _ = writeln!(
         out,
-        "{} pid {} | user {} | status {} | priority {}",
+        "{} pid {} | ppid {} | user {} | status {} | priority {}",
         process.name,
         process.pid,
+        process
+            .parent_pid
+            .map(|pid| pid.to_string())
+            .unwrap_or_else(|| "-".to_string()),
         process.user,
         process.status,
         process
@@ -92,13 +105,21 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
     );
     let _ = writeln!(
         out,
-        "CPU {} | Memory {} | Disk R {} W {} | runtime {} | impact {}",
+        "CPU {} | Memory {} | Virtual {} | Mem% {} | runtime {} | impact {}",
         format::percent(process.cpu_usage_percent as f64),
         format::bytes(process.memory_bytes),
-        format::bytes_rate(process.disk_read_bytes_per_sec),
-        format::bytes_rate(process.disk_write_bytes_per_sec),
+        format::bytes(process.virtual_memory_bytes),
+        format::percent(process.memory_percent),
         format::duration(process.runtime_seconds),
         format::number(process.energy_impact),
+    );
+    let _ = writeln!(
+        out,
+        "Disk R {} | W {} | Total R {} | W {}",
+        format::bytes_rate(process.disk_read_bytes_per_sec),
+        format::bytes_rate(process.disk_write_bytes_per_sec),
+        format::bytes(process.total_disk_read_bytes),
+        format::bytes(process.total_disk_written_bytes),
     );
     let _ = writeln!(
         out,
@@ -112,9 +133,6 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
             .map(|value| format::bytes_rate(value))
             .unwrap_or_else(|| "-".to_string()),
     );
-    let _ = writeln!(out, "cwd: {}", process.cwd);
-    let _ = writeln!(out, "exe: {}", process.executable);
-    let _ = writeln!(out, "cmd: {}", process.command);
     if process.total_network_read_bytes.is_none() && process.total_network_written_bytes.is_none() {
         let _ = writeln!(
             out,
@@ -134,6 +152,31 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
                 .unwrap_or_else(|| "-".to_string()),
         );
     }
+    let _ = writeln!(
+        out,
+        "started {} | session {} | threads {} | open files {}",
+        format::epoch_time(process.start_time_unix),
+        process
+            .session_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        process
+            .thread_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        process
+            .open_files
+            .map(|files| {
+                process
+                    .open_files_limit
+                    .map(|limit| format!("{files}/{limit}"))
+                    .unwrap_or_else(|| files.to_string())
+            })
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    let _ = writeln!(out, "cwd: {}", process.cwd);
+    let _ = writeln!(out, "exe: {}", process.executable);
+    let _ = writeln!(out, "cmd: {}", process.command);
 
     let _ = writeln!(out);
     let _ = writeln!(out, "Sockets");
@@ -177,6 +220,7 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
 
 
 pub fn collect_handles(pid: u32) -> Result<ProcessHandles> {
+    ensure_lsof_available()?;
     let output = Command::new("lsof")
         .args(["-nP", "-p", &pid.to_string(), "-F", "ftDnPnT"])
         .output()?;
@@ -190,13 +234,31 @@ pub fn collect_handles(pid: u32) -> Result<ProcessHandles> {
     Ok(ProcessHandles { files, sockets })
 }
 
+fn ensure_lsof_available() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        if Command::new("which").arg("lsof").output().is_err() {
+            return Err(error::message(
+                "lsof is not found in PATH. Please install it or ensure it is available.",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn is_empty_lsof_result(output: &Output) -> bool {
+    // lsof returns 1 when no files are found for the PID
     output.status.code() == Some(1)
 }
 
 fn lsof_failure_message(kind: &str, output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr = stderr.trim();
+    if stderr.contains("Permission denied") {
+        return format!(
+            "lsof {kind} failed: Permission denied. Try running with sudo or granting 'Full Disk Access' to your terminal."
+        );
+    }
     if stderr.is_empty() {
         format!(
             "lsof {kind} failed with status {}",

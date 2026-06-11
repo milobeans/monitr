@@ -222,7 +222,6 @@ mod tests {
             network_out_rate: None,
             total_network_in: None,
             total_network_out: None,
-            network_attribution_supported: false,
             run_time: 0,
             start_time: 0,
             energy_impact: 0.0,

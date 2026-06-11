@@ -15,6 +15,7 @@ pub struct SnapshotOptions<'a> {
     pub filter: Option<&'a str>,
     pub limit: Option<usize>,
     pub json: bool,
+    pub full: bool,
 }
 
 pub fn render_snapshot(snapshot: &Snapshot, options: SnapshotOptions<'_>) -> Result<String> {
@@ -27,7 +28,7 @@ pub fn render_snapshot(snapshot: &Snapshot, options: SnapshotOptions<'_>) -> Res
         ))?);
     }
 
-    Ok(render_snapshot_text(snapshot, options.filter, processes))
+    Ok(render_snapshot_text(snapshot, options.filter, processes, options.full))
 }
 
 fn filtered_processes<'a>(
@@ -58,6 +59,7 @@ fn render_snapshot_text(
     snapshot: &Snapshot,
     filter: Option<&str>,
     processes: Vec<&ProcessRow>,
+    full: bool,
 ) -> String {
     let mut out = String::new();
     let totals = &snapshot.totals;
@@ -79,22 +81,52 @@ fn render_snapshot_text(
         snapshot.sample_span.as_secs_f64(),
         filter,
     );
-    let _ = writeln!(
-        out,
-        "{:>7} {:>7} {:>10} {:>12} {:<13} NAME",
-        "PID", "%CPU", "MEMORY", "DISK/S", "USER"
-    );
-    for process in processes {
+
+    if full {
         let _ = writeln!(
             out,
-            "{:>7} {:>7} {:>10} {:>12} {:<13} {}",
-            process.pid,
-            format::percent(process.cpu_usage as f64),
-            format::bytes(process.memory),
-            format::bytes_rate(process.disk_read_rate + process.disk_write_rate),
-            format::truncate_middle(&process.user, 13),
-            process.name,
+            "{:>7} {:>7} {:>10} {:>12} {:>7} {:>8} {:<13} NAME",
+            "PID", "%CPU", "MEMORY", "DISK/S", "PPID", "THREADS", "USER"
         );
+        for process in processes {
+            let details = process.selected_details.as_ref();
+            let _ = writeln!(
+                out,
+                "{:>7} {:>7} {:>10} {:>12} {:>7} {:>8} {:<13} {}",
+                process.pid,
+                format::percent(process.cpu_usage as f64),
+                format::bytes(process.memory),
+                format::bytes_rate(process.disk_read_rate + process.disk_write_rate),
+                process
+                    .parent_pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                details
+                    .and_then(|d| d.thread_count)
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                format::truncate_middle(&process.user, 13),
+                process.name,
+            );
+        }
+    } else {
+        let _ = writeln!(
+            out,
+            "{:>7} {:>7} {:>10} {:>12} {:<13} NAME",
+            "PID", "%CPU", "MEMORY", "DISK/S", "USER"
+        );
+        for process in processes {
+            let _ = writeln!(
+                out,
+                "{:>7} {:>7} {:>10} {:>12} {:<13} {}",
+                process.pid,
+                format::percent(process.cpu_usage as f64),
+                format::bytes(process.memory),
+                format::bytes_rate(process.disk_read_rate + process.disk_write_rate),
+                format::truncate_middle(&process.user, 13),
+                process.name,
+            );
+        }
     }
     out
 }
@@ -292,6 +324,7 @@ mod tests {
                 filter: None,
                 limit: None,
                 json: true,
+                full: false,
             },
         )
         .unwrap();

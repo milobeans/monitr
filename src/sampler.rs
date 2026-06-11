@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     ffi::OsStr,
-    process::Command,
     time::{Duration, Instant},
 };
 
@@ -71,7 +70,6 @@ pub struct ProcessRow {
     pub network_out_rate: Option<f64>,
     pub total_network_in: Option<u64>,
     pub total_network_out: Option<u64>,
-    pub network_attribution_supported: bool,
     pub run_time: u64,
     pub start_time: u64,
     pub energy_impact: f64,
@@ -281,7 +279,6 @@ impl Sampler {
                     detail_pid,
                     seconds,
                     network_samples.get(&pid).copied(),
-                    network_attribution_supported,
                 )
             })
             .collect::<Vec<_>>();
@@ -390,7 +387,6 @@ impl Sampler {
         detail_pid: Option<u32>,
         seconds: f64,
         network_sample: Option<ProcessNetworkSample>,
-        network_attribution_supported: bool,
     ) -> ProcessRow {
         let disk = process.disk_usage();
         let pid = process.pid().as_u32();
@@ -476,7 +472,6 @@ impl Sampler {
             network_out_rate,
             total_network_in,
             total_network_out,
-            network_attribution_supported,
             run_time: process.run_time(),
             start_time: process.start_time(),
             energy_impact,
@@ -941,7 +936,6 @@ mod tests {
             network_out_rate: None,
             total_network_in: None,
             total_network_out: None,
-            network_attribution_supported: false,
             run_time: 0,
             start_time: 0,
             energy_impact: 0.0,

@@ -289,9 +289,9 @@ fn render_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     app.table_area = area;
 
-    let compact = compact_table(area.width);
+    let compact = is_compact(app.compact_mode, area.width);
     let (headers, widths) =
-        table_schema_for_width(app.tab, app.sort_key, app.sort_desc, area.width);
+        table_schema_for_width(app, area.width);
     let header = Row::new(headers.iter().cloned().map(Cell::from).collect::<Vec<_>>())
         .style(
             Style::default()
@@ -366,13 +366,24 @@ fn render_stateful_table(
     frame.render_stateful_widget(table, area, state);
 }
 
-fn table_schema_for_width(
+fn table_schema_for_width(app: &App, area_width: u16) -> (Vec<String>, Vec<Constraint>) {
+    table_schema_for_fields(
+        app.tab,
+        app.sort_key,
+        app.sort_desc,
+        app.compact_mode,
+        area_width,
+    )
+}
+
+fn table_schema_for_fields(
     tab: Tab,
     sort_key: crate::app::SortKey,
     sort_desc: bool,
+    compact_mode: bool,
     area_width: u16,
 ) -> (Vec<String>, Vec<Constraint>) {
-    if compact_table(area_width) {
+    if is_compact(compact_mode, area_width) {
         return compact_table_schema(tab, sort_key, sort_desc);
     }
 
@@ -509,8 +520,15 @@ fn table_schema_for_width(
     (headers, widths)
 }
 
-pub fn column_widths(tab: Tab, area_width: u16) -> Vec<usize> {
-    let (_, constraints) = table_schema_for_width(tab, crate::app::SortKey::Pid, true, area_width);
+pub fn column_widths(
+    tab: Tab,
+    sort_key: crate::app::SortKey,
+    sort_desc: bool,
+    compact_mode: bool,
+    area_width: u16,
+) -> Vec<usize> {
+    let (_, constraints) =
+        table_schema_for_fields(tab, sort_key, sort_desc, compact_mode, area_width);
     let inner_width = area_width.saturating_sub(2) as usize;
     let spacing = constraints.len().saturating_sub(1);
     let fixed: usize = constraints
@@ -547,8 +565,13 @@ pub fn column_widths(tab: Tab, area_width: u16) -> Vec<usize> {
         .collect()
 }
 
-pub fn column_sort_key(tab: Tab, index: usize, area_width: u16) -> Option<crate::app::SortKey> {
-    if compact_table(area_width) {
+pub fn column_sort_key(
+    tab: Tab,
+    compact_mode: bool,
+    index: usize,
+    area_width: u16,
+) -> Option<crate::app::SortKey> {
+    if is_compact(compact_mode, area_width) {
         return compact_column_sort_key(tab, index);
     }
     full_column_sort_key(tab, index)
@@ -581,7 +604,7 @@ fn process_row(process: &ProcessRow, tab: Tab, compact: bool) -> Row<'static> {
         .unwrap_or_else(|| "-".to_string());
 
     let cells = if compact {
-        compact_process_cells(process, tab, &pid, &name, &status, disk_rate)
+        compact_process_cells(process, tab, &pid, &name, &status)
     } else {
         match tab {
             Tab::Cpu => vec![
@@ -665,7 +688,6 @@ fn compact_process_cells(
     pid: &str,
     name: &str,
     status: &str,
-    disk_rate: f64,
 ) -> Vec<Cell<'static>> {
     match tab {
         Tab::Cpu => vec![
@@ -822,8 +844,8 @@ fn compact_widths(widths: &[u16]) -> Vec<Constraint> {
         .collect()
 }
 
-fn compact_table(area_width: u16) -> bool {
-    area_width < COMPACT_TABLE_WIDTH
+fn is_compact(compact_mode: bool, area_width: u16) -> bool {
+    compact_mode || area_width < COMPACT_TABLE_WIDTH
 }
 
 fn compact_column_sort_key(tab: Tab, index: usize) -> Option<crate::app::SortKey> {
@@ -1386,102 +1408,110 @@ fn render_handles(frame: &mut Frame<'_>, area: Rect, view: &HandlesView) {
         ),
         Span::styled(format!("pid {}", view.pid), Style::default().fg(MUTED)),
     ])];
-    if let Some(error) = &view.error {
-        lines.push(Line::from(Span::styled(
-            error.clone(),
-            Style::default().fg(RED),
-        )));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(section_header(format!("Sockets ({})", view.sockets.len())));
-    if view.sockets.is_empty() {
-        lines.push(muted_line("none visible"));
+    
+    if view.loading {
+        lines.push(Line::from(""));
+        lines.push(muted_line("Loading handles..."));
+        lines.push(Line::from(""));
+        lines.push(muted_line("Press Esc, Enter, o, or q to close."));
     } else {
-        for socket in view.sockets.iter().take(per_section) {
-            let remote_or_state = socket
-                .remote
-                .as_deref()
-                .or(socket.state.as_deref())
-                .unwrap_or("-");
-            let proto_color = if socket.protocol.to_uppercase() == "TCP" {
-                GREEN
-            } else {
-                BLUE
-            };
-            let state_color = if remote_or_state == "LISTEN" {
-                YELLOW
-            } else if remote_or_state == "ESTABLISHED" {
-                GREEN
-            } else {
-                TEXT
-            };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{:<6}", format::truncate_middle(&socket.fd, 5)),
-                    Style::default().fg(MUTED),
-                ),
-                Span::styled(
-                    format!("{:<6}", socket.protocol),
-                    Style::default()
-                        .fg(proto_color)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("{:<29}", format::truncate_middle(&socket.local, 28)),
-                    Style::default().fg(TEXT),
-                ),
-                Span::styled(
-                    remote_or_state.to_string(),
-                    Style::default().fg(state_color),
-                ),
-            ]));
-        }
-        if view.sockets.len() > per_section {
-            lines.push(muted_line(&overflow_hint(
-                view.sockets.len() - per_section,
-                view.pid,
+        if let Some(error) = &view.error {
+            lines.push(Line::from(Span::styled(
+                error.clone(),
+                Style::default().fg(RED),
             )));
         }
-    }
 
-    lines.push(Line::from(""));
-    lines.push(section_header(format!("Open files ({})", view.files.len())));
-    if view.files.is_empty() {
-        lines.push(muted_line("none visible"));
-    } else {
-        for file in view.files.iter().take(per_section) {
-            let type_color = match file.file_type.as_str() {
-                "DIR" => BLUE,
-                "REG" => TEXT,
-                "PIPE" => YELLOW,
-                _ => MUTED,
-            };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{:<6}", format::truncate_middle(&file.fd, 5)),
-                    Style::default().fg(MUTED),
-                ),
-                Span::styled(
-                    format!("{:<6}", file.file_type),
-                    Style::default().fg(type_color),
-                ),
-                Span::styled(
-                    format::truncate_middle(&file.name, name_width),
-                    Style::default().fg(TEXT),
-                ),
-            ]));
+        lines.push(Line::from(""));
+        lines.push(section_header(format!("Sockets ({})", view.sockets.len())));
+        if view.sockets.is_empty() {
+            lines.push(muted_line("none visible"));
+        } else {
+            for socket in view.sockets.iter().take(per_section) {
+                let remote_or_state = socket
+                    .remote
+                    .as_deref()
+                    .or(socket.state.as_deref())
+                    .unwrap_or("-");
+                let proto_color = if socket.protocol.to_uppercase() == "TCP" {
+                    GREEN
+                } else {
+                    BLUE
+                };
+                let state_color = if remote_or_state == "LISTEN" {
+                    YELLOW
+                } else if remote_or_state == "ESTABLISHED" {
+                    GREEN
+                } else {
+                    TEXT
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{:<6}", format::truncate_middle(&socket.fd, 5)),
+                        Style::default().fg(MUTED),
+                    ),
+                    Span::styled(
+                        format!("{:<6}", socket.protocol),
+                        Style::default()
+                            .fg(proto_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("{:<29}", format::truncate_middle(&socket.local, 28)),
+                        Style::default().fg(TEXT),
+                    ),
+                    Span::styled(
+                        remote_or_state.to_string(),
+                        Style::default().fg(state_color),
+                    ),
+                ]));
+            }
+            if view.sockets.len() > per_section {
+                lines.push(muted_line(&overflow_hint(
+                    view.sockets.len() - per_section,
+                    view.pid,
+                )));
+            }
         }
-        if view.files.len() > per_section {
-            lines.push(muted_line(&overflow_hint(
-                view.files.len() - per_section,
-                view.pid,
-            )));
-        }
-    }
 
-    lines.push(Line::from(""));
-    lines.push(muted_line("Press Esc, Enter, o, or q to close."));
+        lines.push(Line::from(""));
+        lines.push(section_header(format!("Open files ({})", view.files.len())));
+        if view.files.is_empty() {
+            lines.push(muted_line("none visible"));
+        } else {
+            for file in view.files.iter().take(per_section) {
+                let type_color = match file.file_type.as_str() {
+                    "DIR" => BLUE,
+                    "REG" => TEXT,
+                    "PIPE" => YELLOW,
+                    _ => MUTED,
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{:<6}", format::truncate_middle(&file.fd, 5)),
+                        Style::default().fg(MUTED),
+                    ),
+                    Span::styled(
+                        format!("{:<6}", file.file_type),
+                        Style::default().fg(type_color),
+                    ),
+                    Span::styled(
+                        format::truncate_middle(&file.name, name_width),
+                        Style::default().fg(TEXT),
+                    ),
+                ]));
+            }
+            if view.files.len() > per_section {
+                lines.push(muted_line(&overflow_hint(
+                    view.files.len() - per_section,
+                    view.pid,
+                )));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(muted_line("Press Esc, Enter, o, or q to close."));
+    }
 
     let panel = Paragraph::new(lines)
         .block(
@@ -1779,7 +1809,7 @@ mod tests {
     #[test]
     fn compact_table_widths_fit_narrow_panes() {
         for tab in Tab::ALL {
-            let widths = column_widths(tab, 60);
+            let widths = column_widths(tab, crate::app::SortKey::Pid, true, true, 60);
             let spacing = widths.len().saturating_sub(1);
             assert!(
                 widths.iter().sum::<usize>() + spacing <= 58,
@@ -1790,14 +1820,14 @@ mod tests {
 
     #[test]
     fn compact_table_columns_keep_primary_sort_targets() {
-        assert_eq!(column_sort_key(Tab::Cpu, 2, 60), Some(SortKey::Cpu));
-        assert_eq!(column_sort_key(Tab::Memory, 2, 60), Some(SortKey::Memory));
-        assert_eq!(column_sort_key(Tab::Energy, 2, 60), Some(SortKey::Energy));
-        assert_eq!(column_sort_key(Tab::Disk, 2, 60), Some(SortKey::DiskRead));
-        assert_eq!(column_sort_key(Tab::Disk, 3, 60), Some(SortKey::DiskWrite));
-        assert_eq!(column_sort_key(Tab::Network, 2, 60), Some(SortKey::NetworkIn));
-        assert_eq!(column_sort_key(Tab::Network, 3, 60), Some(SortKey::NetworkOut));
-        assert_eq!(column_sort_key(Tab::Movers, 2, 60), Some(SortKey::Trend));
+        assert_eq!(column_sort_key(Tab::Cpu, false, 2, 60), Some(SortKey::Cpu));
+        assert_eq!(column_sort_key(Tab::Memory, false, 2, 60), Some(SortKey::Memory));
+        assert_eq!(column_sort_key(Tab::Energy, false, 2, 60), Some(SortKey::Energy));
+        assert_eq!(column_sort_key(Tab::Disk, false, 2, 60), Some(SortKey::DiskRead));
+        assert_eq!(column_sort_key(Tab::Disk, false, 3, 60), Some(SortKey::DiskWrite));
+        assert_eq!(column_sort_key(Tab::Network, false, 2, 60), Some(SortKey::NetworkIn));
+        assert_eq!(column_sort_key(Tab::Network, false, 3, 60), Some(SortKey::NetworkOut));
+        assert_eq!(column_sort_key(Tab::Movers, false, 2, 60), Some(SortKey::Trend));
     }
 
     #[test]

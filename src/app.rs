@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
@@ -12,10 +13,11 @@ use sysinfo::Signal;
 
 use crate::{
     MAX_INTERVAL_MS, MIN_INTERVAL_MS,
+    config::{Preferences, PreferencesSource},
     error::Result,
     filter::Filter,
     history::History,
-    inspect::{self, FileEntry, SocketEntry},
+    inspect::{self, FileEntry, ProcessHandles, SocketEntry},
     sampler::{
         ProcessRow, ProcessSample, Sampler, Snapshot, UsageSample, apply_process_trends,
         collect_process_samples,
@@ -141,6 +143,14 @@ pub struct HandlesView {
     pub files: Vec<FileEntry>,
     pub sockets: Vec<SocketEntry>,
     pub error: Option<String>,
+    pub loading: bool,
+}
+
+struct HandleResult {
+    pid: u32,
+    name: String,
+    handles: crate::inspect::ProcessHandles,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,6 +224,7 @@ pub struct App {
     pub filter: String,
     pub filter_mode: bool,
     pub show_details: bool,
+    pub compact_mode: bool,
     pub show_help: bool,
     pub notice: Option<Notice>,
     pub confirm: Option<ProcessIntent>,
@@ -228,16 +239,23 @@ pub struct App {
     last_refresh: Instant,
     last_overview_refresh: Instant,
     should_quit: bool,
+    handles_tx: mpsc::Sender<HandleResult>,
+    handles_rx: mpsc::Receiver<HandleResult>,
+    pending_handles_pid: Option<u32>,
+    handles_cache: HashMap<u32, (ProcessHandles, Instant)>,
 }
 
 impl App {
     pub fn new(interval: Duration, initial_filter: Option<String>) -> Result<Self> {
+        let prefs = Preferences::load();
         let mut sampler = Sampler::new()?;
         let overview_sampler = Sampler::new()?;
         let snapshot = sampler.sample(None);
         let previous_samples = collect_process_samples(&snapshot.processes);
         let mut history = History::default();
         history.record(&snapshot);
+        let (handles_tx, handles_rx) = mpsc::channel();
+        let filter = initial_filter.unwrap_or_else(|| prefs.filter.clone());
         let mut app = Self {
             sampler,
             overview_sampler,
@@ -246,12 +264,13 @@ impl App {
             history,
             table_state: TableState::default(),
             visible: Vec::new(),
-            tab: Tab::Cpu,
-            sort_key: SortKey::Cpu,
-            sort_desc: true,
-            filter: initial_filter.unwrap_or_default(),
+            tab: prefs.apply_tab(),
+            sort_key: prefs.apply_sort_key(),
+            sort_desc: prefs.sort_desc,
+            filter,
             filter_mode: false,
-            show_details: true,
+            show_details: prefs.show_details,
+            compact_mode: prefs.compact_mode,
             show_help: false,
             notice: None,
             confirm: None,
@@ -259,13 +278,17 @@ impl App {
             table_area: Rect::default(),
             inspector_scroll: 0,
             help_scroll: 0,
-            overview_visible: true,
+            overview_visible: prefs.overview_visible,
             last_header_click: None,
             sort_dirty: true,
             interval,
             last_refresh: Instant::now(),
             last_overview_refresh: Instant::now(),
             should_quit: false,
+            handles_tx,
+            handles_rx,
+            pending_handles_pid: None,
+            handles_cache: HashMap::new(),
         };
         app.rebuild_view(None);
         Ok(app)
@@ -294,9 +317,15 @@ impl App {
 
             if self.last_refresh.elapsed() >= self.interval {
                 self.refresh();
+                self.prune_handles_cache();
                 needs_draw = true;
             } else if self.last_overview_refresh.elapsed() >= self.overview_interval() {
                 self.refresh_overview();
+                needs_draw = true;
+            }
+
+            self.poll_handle_results();
+            if self.handles.is_some() && self.pending_handles_pid.is_none() {
                 needs_draw = true;
             }
         }
@@ -393,15 +422,26 @@ impl App {
                     KeyCode::Char('i') => {
                         self.show_details = !self.show_details;
                         self.inspector_scroll = 0;
+                        self.save_preferences();
                         true
                     }
                     KeyCode::Enter => self.toggle_handles(),
                     KeyCode::Char('o') => {
                         self.overview_visible = !self.overview_visible;
+                        self.save_preferences();
+                        true
+                    }
+                    KeyCode::Char('x') => {
+                        self.compact_mode = !self.compact_mode;
+                        self.save_preferences();
                         true
                     }
                     KeyCode::Char('r') => {
                         self.refresh();
+                        true
+                    }
+                    KeyCode::Char('R') => {
+                        self.reset_defaults();
                         true
                     }
                     KeyCode::Char('s') => {
@@ -535,6 +575,7 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char('q') => {
                 self.handles = None;
+                self.pending_handles_pid = None;
                 true
             }
             _ => false,
@@ -544,6 +585,7 @@ impl App {
     fn toggle_handles(&mut self) -> bool {
         if self.handles.is_some() {
             self.handles = None;
+            self.pending_handles_pid = None;
             return true;
         }
         let Some(process) = self.selected_process() else {
@@ -551,24 +593,64 @@ impl App {
         };
         let pid = process.pid;
         let name = process.name.clone();
-        let view = match inspect::collect_handles(pid) {
-            Ok(handles) => HandlesView {
+
+        if let Some((handles, _)) = self.handles_cache.get(&pid) {
+            self.handles = Some(HandlesView {
                 pid,
                 name,
-                files: handles.files,
-                sockets: handles.sockets,
+                files: handles.files.clone(),
+                sockets: handles.sockets.clone(),
                 error: None,
-            },
-            Err(error) => HandlesView {
+                loading: false,
+            });
+            return true;
+        }
+
+        self.pending_handles_pid = Some(pid);
+        self.handles = Some(HandlesView {
+            pid,
+            name,
+            files: Vec::new(),
+            sockets: Vec::new(),
+            error: None,
+            loading: true,
+        });
+        let tx = self.handles_tx.clone();
+        std::thread::spawn(move || {
+            let result = inspect::collect_handles(pid);
+            let error = result.as_ref().err().map(|e| e.to_string());
+            let handles = match result {
+                Ok(h) => h,
+                Err(_) => crate::inspect::ProcessHandles::default(),
+            };
+            let _ = tx.send(HandleResult {
                 pid,
-                name,
-                files: Vec::new(),
-                sockets: Vec::new(),
-                error: Some(error.to_string()),
-            },
-        };
-        self.handles = Some(view);
+                name: String::new(),
+                handles,
+                error,
+            });
+        });
         true
+    }
+
+    fn poll_handle_results(&mut self) {
+        while let Ok(result) = self.handles_rx.try_recv() {
+            if result.error.is_none() {
+                self.handles_cache
+                    .insert(result.pid, (result.handles.clone(), Instant::now()));
+            }
+            if self.pending_handles_pid == Some(result.pid) {
+                self.handles = Some(HandlesView {
+                    pid: result.pid,
+                    name: result.name,
+                    files: result.handles.files,
+                    sockets: result.handles.sockets,
+                    error: result.error,
+                    loading: false,
+                });
+                self.pending_handles_pid = None;
+            }
+        }
     }
 
     fn handle_confirm_key(&mut self, key: KeyEvent, intent: ProcessIntent) -> Result<bool> {
@@ -642,7 +724,9 @@ impl App {
         }
         let visible_index = click_row - table_top + self.table_state.offset();
         if visible_index < self.visible.len() {
+            let previous = self.table_state.selected();
             self.table_state.select(Some(visible_index));
+            self.cancel_pending_handles_if_selection_changed(previous, Some(visible_index));
             self.hydrate_selected_details();
             return true;
         }
@@ -692,7 +776,7 @@ impl App {
         }
         let relative_column = column - table_x - 1;
 
-        let widths = ui::column_widths(self.tab, self.table_area.width);
+        let widths = ui::column_widths(self.tab, self.sort_key, self.sort_desc, self.compact_mode, self.table_area.width);
         let mut position = 0;
         for (index, width) in widths.iter().enumerate() {
             if relative_column >= position && relative_column < position + width {
@@ -704,7 +788,7 @@ impl App {
     }
 
     fn column_index_to_sort_key(&self, index: usize) -> Option<SortKey> {
-        ui::column_sort_key(self.tab, index, self.table_area.width)
+        ui::column_sort_key(self.tab, self.compact_mode, index, self.table_area.width)
     }
 
     fn scroll_inspector(&mut self, amount: usize) -> bool {
@@ -720,6 +804,21 @@ impl App {
         } else {
             false
         }
+    }
+
+    fn save_preferences(&self) {
+        let source = PreferencesSource {
+            tab: self.tab,
+            sort_key: self.sort_key,
+            sort_desc: self.sort_desc,
+            show_details: self.show_details,
+            overview_visible: self.overview_visible,
+            interval: self.interval,
+            filter: self.filter.clone(),
+            compact_mode: self.compact_mode,
+        };
+        let prefs = Preferences::from_app(&source);
+        prefs.save();
     }
 
     fn refresh(&mut self) {
@@ -741,6 +840,13 @@ impl App {
         } = self.overview_sampler.sample_usage();
         self.history.record_usage(cpu_usage as f64, memory_percent);
         self.last_overview_refresh = Instant::now();
+    }
+
+    fn prune_handles_cache(&mut self) {
+        let now = Instant::now();
+        let max_age = Duration::from_secs(30);
+        self.handles_cache
+            .retain(|_, (_, created_at)| now.duration_since(*created_at) < max_age);
     }
 
     fn clear_filter(&mut self) -> bool {
@@ -772,7 +878,9 @@ impl App {
             .collect();
 
         if self.visible.is_empty() {
+            let previous = self.table_state.selected();
             self.table_state.select(None);
+            self.cancel_pending_handles_if_selection_changed(previous, None);
             return;
         }
 
@@ -785,7 +893,9 @@ impl App {
             .or_else(|| self.table_state.selected())
             .unwrap_or(0)
             .min(self.visible.len() - 1);
+        let previous = self.table_state.selected();
         self.table_state.select(Some(selected));
+        self.cancel_pending_handles_if_selection_changed(previous, Some(selected));
         self.hydrate_selected_details();
     }
 
@@ -830,6 +940,7 @@ impl App {
         self.sort_desc = self.sort_key.default_desc();
         self.sort_dirty = true;
         self.rebuild_view(self.selected_pid());
+        self.save_preferences();
         true
     }
 
@@ -858,6 +969,7 @@ impl App {
         }
         self.sort_dirty = true;
         self.rebuild_view(self.selected_pid());
+        self.save_preferences();
     }
 
     fn cycle_sort(&mut self) {
@@ -883,6 +995,7 @@ impl App {
         self.sort_desc = self.sort_key.default_desc();
         self.sort_dirty = true;
         self.rebuild_view(self.selected_pid());
+        self.save_preferences();
     }
 
     fn begin_action(&mut self, intent: ProcessIntent) -> bool {
@@ -907,6 +1020,23 @@ impl App {
         };
         self.interval = Duration::from_millis(next);
         self.notice = Some(Notice::new(format!("refresh interval: {next} ms")));
+        self.save_preferences();
+    }
+
+    fn reset_defaults(&mut self) {
+        self.tab = Tab::Cpu;
+        self.sort_key = SortKey::Cpu;
+        self.sort_desc = true;
+        self.show_details = true;
+        self.overview_visible = true;
+        self.compact_mode = false;
+        self.interval = Duration::from_millis(1_000);
+        self.filter.clear();
+        self.filter_mode = false;
+        self.sort_dirty = true;
+        self.rebuild_view(self.selected_pid());
+        self.save_preferences();
+        self.notice = Some(Notice::new("preferences reset to defaults"));
     }
 
     fn select_next(&mut self, amount: usize) -> bool {
@@ -917,6 +1047,7 @@ impl App {
         let selected = previous.unwrap_or(0);
         let next = (selected + amount).min(self.visible.len() - 1);
         self.table_state.select(Some(next));
+        self.cancel_pending_handles_if_selection_changed(previous, Some(next));
         self.hydrate_selected_details();
         previous != Some(next)
     }
@@ -928,14 +1059,17 @@ impl App {
         let selected = self.table_state.selected().unwrap_or(0);
         let next = selected.saturating_sub(amount);
         self.table_state.select(Some(next));
+        self.cancel_pending_handles_if_selection_changed(Some(selected), Some(next));
         self.hydrate_selected_details();
         next != selected
     }
 
     fn select_first(&mut self) -> bool {
         if !self.visible.is_empty() {
-            let changed = self.table_state.selected() != Some(0);
+            let previous = self.table_state.selected();
+            let changed = previous != Some(0);
             self.table_state.select(Some(0));
+            self.cancel_pending_handles_if_selection_changed(previous, Some(0));
             self.hydrate_selected_details();
             changed
         } else {
@@ -945,13 +1079,22 @@ impl App {
 
     fn select_last(&mut self) -> bool {
         if !self.visible.is_empty() {
+            let previous = self.table_state.selected();
             let last = self.visible.len() - 1;
-            let changed = self.table_state.selected() != Some(last);
+            let changed = previous != Some(last);
             self.table_state.select(Some(last));
+            self.cancel_pending_handles_if_selection_changed(previous, Some(last));
             self.hydrate_selected_details();
             changed
         } else {
             false
+        }
+    }
+
+    fn cancel_pending_handles_if_selection_changed(&mut self, previous: Option<usize>, current: Option<usize>) {
+        if previous != current {
+            self.pending_handles_pid = None;
+            self.handles = None;
         }
     }
 
@@ -1021,6 +1164,7 @@ mod tests {
             files: Vec::new(),
             sockets: Vec::new(),
             error: None,
+            loading: false,
         }
     }
 
@@ -1245,10 +1389,18 @@ mod tests {
     }
 
     fn column_position_for(app: &App, target: SortKey) -> u16 {
-        let widths = crate::ui::column_widths(app.tab, app.table_area.width);
+        let widths = crate::ui::column_widths(
+            app.tab,
+            app.sort_key,
+            app.sort_desc,
+            app.compact_mode,
+            app.table_area.width,
+        );
         let mut position = 0;
         for (index, width) in widths.iter().enumerate() {
-            if crate::ui::column_sort_key(app.tab, index, app.table_area.width) == Some(target) {
+            if crate::ui::column_sort_key(app.tab, app.compact_mode, index, app.table_area.width)
+                == Some(target)
+            {
                 return (position + width / 2 + 1) as u16;
             }
             position += width + 1;

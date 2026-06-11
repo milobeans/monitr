@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod error;
 mod filter;
 mod format;
@@ -56,6 +57,7 @@ enum Mode {
 struct SnapshotMode {
     json: bool,
     limit: Option<usize>,
+    full: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +72,7 @@ struct InspectMode {
     pid: u32,
     json: bool,
     limit: usize,
+    full: bool,
 }
 
 fn main() -> Result<()> {
@@ -81,7 +84,7 @@ fn main() -> Result<()> {
         Mode::Tui => run_tui(args),
         Mode::Snapshot(mode) => run_snapshot(args.interval, args.filter.as_deref(), mode),
         Mode::Ports(mode) => run_ports(mode),
-        Mode::Inspect(mode) => run_inspect(mode),
+        Mode::Inspect(mode) => run_inspect(mode, args.interval),
     }
 }
 
@@ -111,6 +114,7 @@ fn run_snapshot(interval_ms: u64, filter: Option<&str>, mode: SnapshotMode) -> R
             filter,
             limit: mode.limit,
             json: mode.json,
+            full: mode.full,
         },
     )?;
     print!("{rendered}");
@@ -135,13 +139,14 @@ fn run_ports(mode: PortsMode) -> Result<()> {
     Ok(())
 }
 
-fn run_inspect(mode: InspectMode) -> Result<()> {
+fn run_inspect(mode: InspectMode, interval_ms: u64) -> Result<()> {
     let options = InspectOptions {
         pid: mode.pid,
         json: mode.json,
         limit: mode.limit,
+        full: mode.full,
     };
-    let inspection = inspect::inspect(options)?;
+    let inspection = inspect::inspect(options, Duration::from_millis(interval_ms))?;
     let rendered = inspect::render(&inspection, options)?;
     print!("{rendered}");
     if !rendered.ends_with('\n') {
@@ -202,8 +207,18 @@ where
                     .get_or_insert(SnapshotMode {
                         json: false,
                         limit: None,
+                        full: false,
                     })
                     .json = true;
+            }
+            "--full" => {
+                snapshot
+                    .get_or_insert(SnapshotMode {
+                        json: false,
+                        limit: None,
+                        full: false,
+                    })
+                    .full = true;
             }
             "-l" | "--limit" => {
                 index += 1;
@@ -214,6 +229,7 @@ where
                     .get_or_insert(SnapshotMode {
                         json: false,
                         limit: None,
+                        full: false,
                     })
                     .limit = Some(parse_limit(value)?);
             }
@@ -222,6 +238,7 @@ where
                     .get_or_insert(SnapshotMode {
                         json: false,
                         limit: None,
+                        full: false,
                     })
                     .limit = Some(parse_limit(&arg["--limit=".len()..])?);
             }
@@ -258,6 +275,7 @@ fn parse_snapshot_args(
     let mut mode = SnapshotMode {
         json: false,
         limit: None,
+        full: false,
     };
     let mut index = 0;
     while let Some(arg) = args.get(index) {
@@ -289,6 +307,7 @@ fn parse_snapshot_args(
                 filter = Some(arg["--filter=".len()..].to_string());
             }
             "--json" => mode.json = true,
+            "--full" => mode.full = true,
             "-l" | "--limit" => {
                 index += 1;
                 let Some(value) = args.get(index) else {
@@ -357,6 +376,7 @@ fn parse_inspect_args(
     let mut pid = None;
     let mut json = false;
     let mut limit = 20;
+    let mut full = false;
     let mut index = 0;
 
     while let Some(arg) = args.get(index) {
@@ -366,6 +386,7 @@ fn parse_inspect_args(
                 return Ok(None);
             }
             "--json" => json = true,
+            "--full" => full = true,
             "-l" | "--limit" => {
                 index += 1;
                 let Some(value) = args.get(index) else {
@@ -395,7 +416,7 @@ fn parse_inspect_args(
     Ok(Some(Args {
         interval,
         filter,
-        mode: Mode::Inspect(InspectMode { pid, json, limit }),
+        mode: Mode::Inspect(InspectMode { pid, json, limit, full }),
     }))
 }
 
@@ -485,6 +506,7 @@ Options:
   -i, --interval <MS>    Sampling window in milliseconds ({MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}) [default: {DEFAULT_INTERVAL_MS}]
   -f, --filter <FILTER>  Filter by PID, name, user, command, or status
       --json             Print JSON
+      --full             Show more columns (PPID, threads, session, start time)
   -l, --limit <N>        Limit process rows
   -h, --help             Print help"
     );
@@ -513,6 +535,7 @@ Usage: monitr inspect <PID> [OPTIONS]
 
 Options:
       --json             Print JSON
+      --full             Show all metadata and extended file list
   -l, --limit <N>        Limit file and socket rows [default: 20]
   -h, --help             Print help"
     );
@@ -627,6 +650,7 @@ mod tests {
                 mode: Mode::Snapshot(SnapshotMode {
                     json: true,
                     limit: Some(5),
+                    full: false,
                 }),
             })
         );
@@ -642,6 +666,7 @@ mod tests {
                 mode: Mode::Snapshot(SnapshotMode {
                     json: true,
                     limit: Some(10),
+                    full: false,
                 }),
             })
         );
@@ -674,6 +699,7 @@ mod tests {
                     pid: 1234,
                     json: true,
                     limit: 7,
+                    full: false,
                 }),
             })
         );
