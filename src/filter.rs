@@ -133,8 +133,7 @@ impl Op {
 }
 
 fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
-    let needle_lower = needle.to_lowercase();
-    haystack.to_lowercase().contains(&needle_lower)
+    haystack.to_lowercase().contains(needle)
 }
 
 fn parse_numeric(raw: &str) -> Option<Term> {
