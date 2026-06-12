@@ -36,6 +36,17 @@ pub fn render_snapshot(snapshot: &Snapshot, options: SnapshotOptions<'_>) -> Res
     ))
 }
 
+pub(crate) fn rendered_process_pids(
+    snapshot: &Snapshot,
+    filter: Option<&str>,
+    limit: Option<usize>,
+) -> Vec<u32> {
+    filtered_processes(snapshot, filter, limit)
+        .into_iter()
+        .map(|process| process.pid)
+        .collect()
+}
+
 fn filtered_processes<'a>(
     snapshot: &'a Snapshot,
     filter: Option<&str>,
@@ -90,18 +101,36 @@ fn render_snapshot_text(
     if full {
         let _ = writeln!(
             out,
-            "{:>7} {:>7} {:>10} {:>12} {:>7} {:>8} {:<13} NAME",
-            "PID", "%CPU", "MEMORY", "DISK/S", "PPID", "THREADS", "USER"
+            "{:>7} {:>7} {:>10} {:>12} {:>10} {:>10} {:>7} {:>8} {:>7} {:>12} {:<13} NAME",
+            "PID",
+            "%CPU",
+            "MEMORY",
+            "DISK/S",
+            "NET IN",
+            "NET OUT",
+            "PPID",
+            "THREADS",
+            "SESSION",
+            "STARTED",
+            "USER"
         );
         for process in processes {
             let details = process.selected_details.as_ref();
             let _ = writeln!(
                 out,
-                "{:>7} {:>7} {:>10} {:>12} {:>7} {:>8} {:<13} {}",
+                "{:>7} {:>7} {:>10} {:>12} {:>10} {:>10} {:>7} {:>8} {:>7} {:>12} {:<13} {}",
                 process.pid,
                 format::percent(process.cpu_usage as f64),
                 format::bytes(process.memory),
                 format::bytes_rate(process.disk_read_rate + process.disk_write_rate),
+                process
+                    .network_in_rate
+                    .map(format::bytes_rate)
+                    .unwrap_or_else(|| "-".to_string()),
+                process
+                    .network_out_rate
+                    .map(format::bytes_rate)
+                    .unwrap_or_else(|| "-".to_string()),
                 process
                     .parent_pid
                     .map(|pid| pid.to_string())
@@ -110,6 +139,11 @@ fn render_snapshot_text(
                     .and_then(|d| d.thread_count)
                     .map(|c| c.to_string())
                     .unwrap_or_else(|| "-".to_string()),
+                details
+                    .and_then(|d| d.session_id)
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                format::epoch_time(process.start_time),
                 format::truncate_middle(&process.user, 13),
                 process.name,
             );
@@ -292,7 +326,9 @@ impl<'a> NetworkDocument<'a> {
 mod tests {
     use std::time::Duration;
 
-    use crate::sampler::{Snapshot, SystemTotals};
+    use crate::sampler::{
+        ProcessRow, ProcessTrend, SelectedProcessDetails, Snapshot, SystemTotals,
+    };
 
     use super::{SnapshotOptions, render_snapshot};
 
@@ -336,5 +372,94 @@ mod tests {
 
         assert!(rendered.contains("\"cpu_usage_percent\": 12.5"));
         assert!(rendered.contains("\"sample_span_ms\": 250"));
+    }
+
+    #[test]
+    fn renders_full_snapshot_text_with_promised_detail_and_network_columns() {
+        let mut snapshot = empty_snapshot();
+        snapshot.processes.push(ProcessRow {
+            pid: 42,
+            pid_str: "42".to_string(),
+            parent_pid: Some(1),
+            name: "example".to_string(),
+            sort_name: "example".to_string(),
+            user: "user".to_string(),
+            command: "example --flag".to_string(),
+            exe: "/bin/example".to_string(),
+            cwd: "/tmp".to_string(),
+            status: "running".to_string(),
+            cpu_usage: 12.5,
+            memory: 1_500_000,
+            virtual_memory: 2_000_000,
+            memory_percent: 1.5,
+            disk_read_rate: 100.0,
+            disk_write_rate: 200.0,
+            total_disk_read: 1_000,
+            total_disk_write: 2_000,
+            network_in_rate: Some(300.0),
+            network_out_rate: Some(400.0),
+            total_network_in: Some(3_000),
+            total_network_out: Some(4_000),
+            run_time: 60,
+            start_time: 1,
+            energy_impact: 2.0,
+            trend: ProcessTrend::default(),
+            selected_details: Some(SelectedProcessDetails {
+                thread_count: Some(7),
+                open_files: Some(3),
+                open_files_limit: Some(256),
+                session_id: Some(501),
+                priority: Some(0),
+            }),
+            search_text: "42 example user running example --flag".to_string(),
+        });
+        snapshot.process_count = snapshot.processes.len();
+
+        let rendered = render_snapshot(
+            &snapshot,
+            SnapshotOptions {
+                filter: None,
+                limit: None,
+                json: false,
+                full: true,
+            },
+        )
+        .unwrap();
+
+        assert!(rendered.contains("NET IN"));
+        assert!(rendered.contains("NET OUT"));
+        assert!(rendered.contains("SESSION"));
+        assert!(rendered.contains("STARTED"));
+        assert!(rendered.contains("300 B/s"));
+        assert!(rendered.contains("400 B/s"));
+        assert!(rendered.contains("501"));
+        assert!(rendered.contains("7"));
+    }
+
+    fn empty_snapshot() -> Snapshot {
+        Snapshot {
+            totals: SystemTotals {
+                cpu_usage: 12.5,
+                cpu_count: 8,
+                total_memory: 100,
+                used_memory: 50,
+                total_swap: 20,
+                used_swap: 2,
+                disk_read_rate: 1.0,
+                disk_write_rate: 2.0,
+                net_in_rate: 3.0,
+                net_out_rate: 4.0,
+                process_network_supported: false,
+                process_network_error: None,
+                uptime: 99,
+                host: "host".into(),
+                os: "macOS".into(),
+            },
+            processes: Vec::new(),
+            disks: Vec::new(),
+            networks: Vec::new(),
+            sample_span: Duration::from_millis(250),
+            process_count: 0,
+        }
     }
 }

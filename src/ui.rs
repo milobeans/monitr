@@ -1358,6 +1358,8 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     );
     add_help_line!("i", "show or hide process inspector");
     add_help_line!("o", "show or hide the overview panel");
+    add_help_line!("x", "toggle compact table mode");
+    add_help_line!("R", "reset persisted preferences to defaults");
     add_help_line!("Ctrl-J / Ctrl-K", "scroll the inspector panel");
     add_help_line!("Enter", "open files and sockets for the selected process");
     add_help_line!("t / f", "send TERM / KILL after confirmation");
@@ -1374,7 +1376,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     add_help_line!("q, Esc, Ctrl-C", "quit");
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Disk and Network inspector panels show system-level volumes/interfaces.",
+        "Disk and Network tables show per-process rates; inspector panels show system-level volumes/interfaces.",
         Style::default().fg(TEXT),
     )));
     lines.push(Line::from(Span::styled(

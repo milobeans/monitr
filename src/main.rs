@@ -108,6 +108,10 @@ fn run_snapshot(interval_ms: u64, filter: Option<&str>, mode: SnapshotMode) -> R
     thread::sleep(Duration::from_millis(interval_ms));
     let mut snapshot = sampler.sample(None);
     apply_process_trends(&mut snapshot.processes, &previous);
+    if mode.full {
+        let pids = output::rendered_process_pids(&snapshot, filter, mode.limit);
+        sampler.hydrate_process_details(&mut snapshot, &pids);
+    }
     let rendered = output::render_snapshot(
         &snapshot,
         SnapshotOptions {
@@ -489,6 +493,7 @@ Options:
   -i, --interval <MS>    Refresh interval in milliseconds ({MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}) [default: {DEFAULT_INTERVAL_MS}]
   -f, --filter <FILTER>  Start with a process filter
       --json             Print one machine-readable process snapshot and exit
+      --full             Print expanded snapshot columns and exit
   -l, --limit <N>        Limit rows for snapshot output
   -h, --help             Print help
   -V, --version          Print version
@@ -511,7 +516,7 @@ Options:
   -i, --interval <MS>    Sampling window in milliseconds ({MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}) [default: {DEFAULT_INTERVAL_MS}]
   -f, --filter <FILTER>  Filter by PID, name, user, command, or status
       --json             Print JSON
-      --full             Show more columns (PPID, threads, session, start time)
+      --full             Show more columns (network, PPID, threads, session, start time)
   -l, --limit <N>        Limit process rows
   -h, --help             Print help"
     );

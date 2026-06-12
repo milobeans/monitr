@@ -11,9 +11,10 @@
 - Process filter by PID, name, user, command, or status, with `cpu>50`, `mem<100mb`, and `field:value` predicates
 - Inspector panel for the selected process
 - Open files and sockets overlay for the selected process, on demand
-- Disk and Network tabs include system-level volume/interface totals in the inspector
+- Disk and Network tabs include per-process rates in the table and system-level volume/interface totals in the inspector
 - CPU, memory, virtual memory, runtime, status, user, parent PID, command, executable, and current working directory
 - Disk read/write rates and totals
+- Per-process network in/out rates and totals where macOS attribution is available
 - macOS thread count for the selected process
 - Open file counts where the OS exposes them
 - Confirmed TERM and KILL actions
@@ -117,6 +118,8 @@ monitr inspect 1234 --limit 20
 | `S` | Reverse sort direction |
 | `c`, `m`, `e`, `d`, `D`, `n`, `p`, `T`, `u` | Sort by CPU, memory, energy impact, disk write, disk read, name, PID, runtime, user |
 | `i` | Toggle inspector |
+| `o` | Toggle overview charts |
+| `x` | Toggle compact table mode |
 | `Enter` | Show open files and sockets for the selected process |
 | `t` | Send TERM after confirmation |
 | `f` | Send KILL after confirmation |
@@ -126,23 +129,25 @@ monitr inspect 1234 --limit 20
 | `+` | Slow the refresh interval |
 | `-` | Speed up the refresh interval |
 | `r` | Refresh now |
+| `R` | Reset persisted preferences to defaults |
 | `?` | Help |
 | `q`, `Esc`, `Ctrl-C` | Quit |
 
 ## Scope
 
-`monitr` is intended to be a faster, lighter terminal alternative to Activity Monitor for common process and system inspection. It does not use Apple's private Activity Monitor internals, so some values are approximations or interface-level summaries:
+`monitr` is intended to be a faster, lighter terminal alternative to Activity Monitor for common process and system inspection. It does not use Apple's private Activity Monitor internals, so some values are approximations or best-effort public-command attributions:
 
 - Energy impact is a lightweight estimate based on CPU, memory share, I/O, and run state.
-- Disk and Network tabs keep a process table for context, while the inspector shows system-level volumes or interfaces.
-- Network throughput is interface-level, not per-process. The `ports` command identifies socket owners but does not attribute byte counts to each process.
+- Disk and Network tabs show process tables with per-process rates where available, while the inspector still shows system-level volumes or interfaces.
+- Per-process network throughput is collected with a bounded `nettop` probe on macOS and degrades gracefully when unsupported, permission-limited, or temporarily backed off after failures.
+- The `ports` command identifies socket owners and connection context; byte-rate attribution is surfaced in the Network table and JSON snapshot fields when macOS provides it.
 - Some process details depend on macOS permissions and may show `-` for protected processes.
 
 ## Roadmap
 
 The strongest opportunities for `monitr` are features that lean into terminal-native workflows or expose macOS process details that Activity Monitor does not make easy to inspect.
 
-- Per-process network attribution: show bytes in/out and active connections by PID, not only interface-level totals. macOS exposes no cheap syscall for this, so it is deferred to an on-demand path rather than the refresh loop; the `o` overlay and `ports` command already identify socket owners.
+- Network attribution polish: keep improving the fallback messaging and freshness indicators around the best-effort per-process `nettop` path, while retaining interface totals in the inspector.
 - Better energy and wakeup data: replace the current lightweight energy estimate with richer macOS-specific signals (idle/interrupt wakeups) where public APIs expose them.
 - Longer timeline windows: the history buffer that drives the overview charts is in place; extend the Movers view from previous-sample deltas to 10 second, 1 minute, and 5 minute windows on top of it.
 - Wider trend visuals: extend the existing CPU/memory overview charts to disk and network, and add richer per-process trend views when the terminal has room.

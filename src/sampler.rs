@@ -385,6 +385,36 @@ impl Sampler {
             })
     }
 
+    pub fn hydrate_process_details(&mut self, snapshot: &mut Snapshot, pids: &[u32]) {
+        if pids.is_empty() {
+            return;
+        }
+
+        let sys_pids = pids.iter().copied().map(Pid::from_u32).collect::<Vec<_>>();
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&sys_pids),
+            false,
+            process_refresh_kind(),
+        );
+
+        for process in snapshot
+            .processes
+            .iter_mut()
+            .filter(|process| pids.contains(&process.pid))
+        {
+            let Some(system_process) = self.system.process(Pid::from_u32(process.pid)) else {
+                continue;
+            };
+            process.selected_details = Some(SelectedProcessDetails {
+                thread_count: platform::thread_count(process.pid),
+                open_files: system_process.open_files(),
+                open_files_limit: system_process.open_files_limit(),
+                session_id: system_process.session_id().map(|pid| pid.as_u32()),
+                priority: platform::priority(process.pid),
+            });
+        }
+    }
+
     fn process_row(
         &self,
         process: &Process,
