@@ -252,8 +252,6 @@ struct ProcessDocument {
     disk_write_delta_bytes_per_sec: f64,
     network_in_delta_bytes_per_sec: Option<f64>,
     network_out_delta_bytes_per_sec: Option<f64>,
-    total_network_read_bytes: Option<u64>,
-    total_network_written_bytes: Option<u64>,
     change_score: f64,
     new_process: bool,
 }
@@ -270,8 +268,6 @@ impl ProcessDocument {
                 .filter(|_| process.network_in_rate.is_some()),
             network_out_delta_bytes_per_sec: Some(process.trend.network_out_rate_delta)
                 .filter(|_| process.network_out_rate.is_some()),
-            total_network_read_bytes: process.total_network_in,
-            total_network_written_bytes: process.total_network_out,
             change_score: process.trend.score(),
             new_process: process.trend.new_process,
         }
@@ -434,6 +430,59 @@ mod tests {
         assert!(rendered.contains("400 B/s"));
         assert!(rendered.contains("501"));
         assert!(rendered.contains("7"));
+    }
+
+    #[test]
+    fn snapshot_json_emits_network_total_keys_once_per_process() {
+        let mut snapshot = empty_snapshot();
+        snapshot.processes.push(ProcessRow {
+            pid: 42,
+            pid_str: "42".to_string(),
+            parent_pid: Some(1),
+            name: "example".to_string(),
+            sort_name: "example".to_string(),
+            user: "user".to_string(),
+            command: "example --flag".to_string(),
+            exe: "/bin/example".to_string(),
+            cwd: "/tmp".to_string(),
+            status: "running".to_string(),
+            cpu_usage: 12.5,
+            memory: 1_500_000,
+            virtual_memory: 2_000_000,
+            memory_percent: 1.5,
+            disk_read_rate: 100.0,
+            disk_write_rate: 200.0,
+            total_disk_read: 1_000,
+            total_disk_write: 2_000,
+            network_in_rate: Some(300.0),
+            network_out_rate: Some(400.0),
+            total_network_in: Some(3_000),
+            total_network_out: Some(4_000),
+            run_time: 60,
+            start_time: 1,
+            energy_impact: 2.0,
+            trend: ProcessTrend::default(),
+            selected_details: None,
+            search_text: "42 example user running example --flag".to_string(),
+        });
+        snapshot.process_count = snapshot.processes.len();
+
+        let rendered = render_snapshot(
+            &snapshot,
+            SnapshotOptions {
+                filter: None,
+                limit: None,
+                json: true,
+                full: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(rendered.matches("\"total_network_read_bytes\"").count(), 1);
+        assert_eq!(
+            rendered.matches("\"total_network_written_bytes\"").count(),
+            1
+        );
     }
 
     fn empty_snapshot() -> Snapshot {
