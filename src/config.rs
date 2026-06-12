@@ -86,34 +86,14 @@ impl Preferences {
     }
 
     pub fn apply_sort_key(&self) -> SortKey {
-        match self.sort_key.as_str() {
-            "Cpu" => SortKey::Cpu,
-            "Memory" => SortKey::Memory,
-            "Energy" => SortKey::Energy,
-            "DiskRead" => SortKey::DiskRead,
-            "DiskWrite" => SortKey::DiskWrite,
-            "NetworkIn" => SortKey::NetworkIn,
-            "NetworkOut" => SortKey::NetworkOut,
-            "Trend" => SortKey::Trend,
-            "Name" => SortKey::Name,
-            "Pid" => SortKey::Pid,
-            "User" => SortKey::User,
-            "Runtime" => SortKey::Runtime,
-            _ => SortKey::Cpu,
-        }
+        SortKey::from_config_name(&self.sort_key)
     }
 
     pub fn from_app(app: &PreferencesSource) -> Self {
         Self {
             version: CONFIG_VERSION,
             tab: app.tab.title().to_string(),
-            sort_key: app
-                .sort_key
-                .title()
-                .replace("% CPU", "Cpu")
-                .replace("Impact", "Energy")
-                .trim()
-                .to_string(),
+            sort_key: app.sort_key.config_name().to_string(),
             sort_desc: app.sort_desc,
             show_details: app.show_details,
             overview_visible: app.overview_visible,
@@ -144,4 +124,72 @@ fn config_path() -> Option<PathBuf> {
             .join("monitr")
             .join("config.json"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Preferences, PreferencesSource};
+    use crate::app::{SortKey, Tab};
+    use std::time::Duration;
+
+    const ALL_SORT_KEYS: [SortKey; 12] = [
+        SortKey::Cpu,
+        SortKey::Memory,
+        SortKey::Energy,
+        SortKey::DiskRead,
+        SortKey::DiskWrite,
+        SortKey::NetworkIn,
+        SortKey::NetworkOut,
+        SortKey::Trend,
+        SortKey::Name,
+        SortKey::Pid,
+        SortKey::User,
+        SortKey::Runtime,
+    ];
+
+    fn source_for(sort_key: SortKey) -> PreferencesSource {
+        PreferencesSource {
+            tab: Tab::Cpu,
+            sort_key,
+            sort_desc: true,
+            show_details: true,
+            overview_visible: true,
+            interval: Duration::from_millis(1_000),
+            filter: String::new(),
+            compact_mode: false,
+        }
+    }
+
+    #[test]
+    fn sort_preferences_round_trip_every_key() {
+        for sort_key in ALL_SORT_KEYS {
+            let prefs = Preferences::from_app(&source_for(sort_key));
+
+            assert_eq!(prefs.sort_key, sort_key.config_name());
+            assert_eq!(prefs.apply_sort_key(), sort_key);
+        }
+    }
+
+    #[test]
+    fn sort_preferences_accept_legacy_display_labels() {
+        let legacy_labels = [
+            ("% CPU", SortKey::Cpu),
+            ("Impact", SortKey::Energy),
+            ("Read/s", SortKey::DiskRead),
+            ("Write/s", SortKey::DiskWrite),
+            ("In/s", SortKey::NetworkIn),
+            ("Out/s", SortKey::NetworkOut),
+            ("Change", SortKey::Trend),
+            ("PID", SortKey::Pid),
+        ];
+
+        for (stored, expected) in legacy_labels {
+            let prefs = Preferences {
+                sort_key: stored.to_string(),
+                ..Preferences::default()
+            };
+
+            assert_eq!(prefs.apply_sort_key(), expected);
+        }
+    }
 }

@@ -104,6 +104,41 @@ impl SortKey {
         }
     }
 
+    pub fn config_name(self) -> &'static str {
+        match self {
+            Self::Cpu => "Cpu",
+            Self::Memory => "Memory",
+            Self::Energy => "Energy",
+            Self::DiskRead => "DiskRead",
+            Self::DiskWrite => "DiskWrite",
+            Self::NetworkIn => "NetworkIn",
+            Self::NetworkOut => "NetworkOut",
+            Self::Trend => "Trend",
+            Self::Name => "Name",
+            Self::Pid => "Pid",
+            Self::User => "User",
+            Self::Runtime => "Runtime",
+        }
+    }
+
+    pub fn from_config_name(name: &str) -> Self {
+        match name {
+            "Cpu" | "% CPU" => Self::Cpu,
+            "Memory" => Self::Memory,
+            "Energy" | "Impact" => Self::Energy,
+            "DiskRead" | "Read/s" => Self::DiskRead,
+            "DiskWrite" | "Write/s" => Self::DiskWrite,
+            "NetworkIn" | "In/s" => Self::NetworkIn,
+            "NetworkOut" | "Out/s" => Self::NetworkOut,
+            "Trend" | "Change" => Self::Trend,
+            "Name" => Self::Name,
+            "Pid" | "PID" => Self::Pid,
+            "User" => Self::User,
+            "Runtime" => Self::Runtime,
+            _ => Self::Cpu,
+        }
+    }
+
     fn default_desc(self) -> bool {
         !matches!(self, Self::Name | Self::Pid | Self::User)
     }
@@ -1427,6 +1462,8 @@ mod tests {
     #[test]
     fn header_click_cycles_desc_asc_then_next_sort_key() {
         let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+        app.tab = Tab::Cpu;
+        app.compact_mode = false;
         app.table_area = Rect::new(0, 0, 200, 20);
         let header_row = app.table_area.y + 1;
         let memory_column = column_position_for(&app, SortKey::Memory);
@@ -1458,6 +1495,8 @@ mod tests {
     #[test]
     fn header_click_on_different_column_resets_to_descending() {
         let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+        app.tab = Tab::Cpu;
+        app.compact_mode = false;
         app.table_area = Rect::new(0, 0, 200, 20);
         let header_row = app.table_area.y + 1;
         let memory_column = column_position_for(&app, SortKey::Memory);
