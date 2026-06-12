@@ -9,6 +9,7 @@ repository = "https://github.com/milobeans/monitr"
 license = "MIT"
 keywords = ["macos", "tui", "monitor", "ratatui", "processes"]
 categories = ["command-line-utilities"]
+exclude = [".idea/"]
 
 [[bin]]
 name = "monitr"
