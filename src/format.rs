@@ -102,13 +102,17 @@ pub fn epoch_time(seconds: u64) -> String {
 }
 
 /// Render values as a Unicode block sparkline scaled against `max`. Values at
-/// or above `max` render as a full block; empty input yields an empty string.
+/// or above `max` render as a full block; zero renders as a space; empty input
+/// yields an empty string.
 pub fn sparkline(values: &[f64], max: f64) -> String {
     const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     let max = max.max(f64::MIN_POSITIVE);
     values
         .iter()
         .map(|value| {
+            if *value <= 0.0 {
+                return ' ';
+            }
             let ratio = (value / max).clamp(0.0, 1.0);
             let level = (ratio * (LEVELS.len() - 1) as f64).round() as usize;
             LEVELS[level.min(LEVELS.len() - 1)]
@@ -170,7 +174,7 @@ mod tests {
     #[test]
     fn renders_sparkline_against_scale() {
         assert_eq!(sparkline(&[], 100.0), "");
-        assert_eq!(sparkline(&[0.0, 100.0], 100.0), "▁█");
+        assert_eq!(sparkline(&[0.0, 100.0], 100.0), " █");
         // Values clamp to the scale rather than overflowing the glyph range.
         assert_eq!(sparkline(&[200.0], 100.0), "█");
         assert_eq!(sparkline(&[50.0], 100.0), "▅");
