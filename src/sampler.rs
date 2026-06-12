@@ -819,16 +819,38 @@ mod platform {
         args: &[&str],
         timeout: Duration,
     ) -> std::io::Result<Output> {
+        use std::io::Read;
+
+        // Drain pipes on background threads so a child writing more than the
+        // OS pipe buffer can still make progress and exit before the deadline.
+        fn drain<R: Read + Send + 'static>(stream: Option<R>) -> thread::JoinHandle<Vec<u8>> {
+            thread::spawn(move || {
+                let mut buffer = Vec::new();
+                if let Some(mut stream) = stream {
+                    let _ = stream.read_to_end(&mut buffer);
+                }
+                buffer
+            })
+        }
+
         let mut child = Command::new(program)
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
         let deadline = Instant::now() + timeout;
+        let stdout_thread = drain(child.stdout.take());
+        let stderr_thread = drain(child.stderr.take());
 
         loop {
-            if child.try_wait()?.is_some() {
-                return child.wait_with_output();
+            if let Some(status) = child.try_wait()? {
+                let stdout = stdout_thread.join().unwrap_or_default();
+                let stderr = stderr_thread.join().unwrap_or_default();
+                return Ok(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
             }
 
             if Instant::now() >= deadline {
@@ -1009,6 +1031,20 @@ mod tests {
         );
 
         assert!(result.is_err_and(|error| error.kind() == std::io::ErrorKind::TimedOut));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn command_output_larger_than_pipe_buffer_does_not_stall() {
+        let result = super::platform::run_command_with_timeout(
+            "sh",
+            &["-c", "head -c 200000 /dev/zero"],
+            Duration::from_secs(5),
+        );
+
+        let output = result.expect("large output should complete before the timeout");
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 200_000);
     }
 
     fn process(
