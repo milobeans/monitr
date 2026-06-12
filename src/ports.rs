@@ -47,13 +47,15 @@ pub fn lookup(options: PortOptions) -> Result<Vec<PortEntry>> {
         }
     }
 
+    crate::inspect::ensure_lsof_available()?;
     let output = Command::new("lsof").args(&args).output()?;
     if !output.status.success() && output.stdout.is_empty() {
         if output.status.code() == Some(1) {
             return Ok(Vec::new());
         }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(error::message(format!("lsof failed: {}", stderr.trim())));
+        return Err(error::message(crate::inspect::lsof_failure_message(
+            "ports", &output,
+        )));
     }
 
     Ok(parse_lsof_fields(&String::from_utf8_lossy(&output.stdout)))

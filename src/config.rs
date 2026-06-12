@@ -60,7 +60,10 @@ impl Preferences {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let _ = fs::write(&path, serde_json::to_string_pretty(self).unwrap_or_default());
+        let _ = fs::write(
+            &path,
+            serde_json::to_string_pretty(self).unwrap_or_default(),
+        );
     }
 
     fn migrate(mut self) -> Self {

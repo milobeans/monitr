@@ -118,16 +118,12 @@ impl ProcessTrend {
         let disk_mib = self.disk_rate_delta().abs() / 1_048_576.0;
         let network_mib = self.network_rate_delta().abs() / 1_048_576.0;
 
-        if cpu_magnitude
-            .max(memory_mib)
-            .max(disk_mib)
-            .max(network_mib)
-            < 0.05
-        {
+        if cpu_magnitude.max(memory_mib).max(disk_mib).max(network_mib) < 0.05 {
             return None;
         }
 
-        if cpu_magnitude >= memory_mib && cpu_magnitude >= disk_mib && cpu_magnitude >= network_mib {
+        if cpu_magnitude >= memory_mib && cpu_magnitude >= disk_mib && cpu_magnitude >= network_mib
+        {
             Some(format!(
                 "CPU {}",
                 crate::format::signed_percent(self.cpu_delta as f64)
@@ -492,7 +488,9 @@ impl Sampler {
                 return (
                     HashMap::new(),
                     false,
-                    Some(format!("process-level network attribution unavailable: {error}")),
+                    Some(format!(
+                        "process-level network attribution unavailable: {error}"
+                    )),
                 );
             }
         };
@@ -501,9 +499,7 @@ impl Sampler {
         for (pid, totals) in totals {
             let previous = self.previous_process_network_totals.get(&pid);
             let in_rate = previous
-                .map(|previous| {
-                    totals.total_in.saturating_sub(previous.total_in) as f64 / seconds
-                })
+                .map(|previous| totals.total_in.saturating_sub(previous.total_in) as f64 / seconds)
                 .unwrap_or(0.0);
             let out_rate = previous
                 .map(|previous| {
@@ -752,10 +748,10 @@ mod platform {
             if message.is_empty() {
                 Err(format!(
                     "nettop exited with status {}",
-                    output.status.code().map_or_else(
-                        || "signal".to_string(),
-                        |code: i32| code.to_string()
-                    )
+                    output
+                        .status
+                        .code()
+                        .map_or_else(|| "signal".to_string(), |code: i32| code.to_string())
                 ))
             } else {
                 Err(format!("nettop failed: {message}"))
@@ -766,7 +762,9 @@ mod platform {
     }
 
     #[cfg(target_os = "macos")]
-    fn parse_process_network_totals(output: &[u8]) -> Result<HashMap<u32, super::ProcessNetworkTotals>, String> {
+    fn parse_process_network_totals(
+        output: &[u8],
+    ) -> Result<HashMap<u32, super::ProcessNetworkTotals>, String> {
         let mut totals = HashMap::new();
         let stdout = String::from_utf8_lossy(output);
         for line in stdout.lines() {

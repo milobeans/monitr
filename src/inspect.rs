@@ -1,6 +1,7 @@
 use std::{
     fmt::Write as _,
     process::{Command, Output},
+    sync::OnceLock,
     time::Duration,
 };
 
@@ -60,12 +61,12 @@ pub fn inspect(options: InspectOptions, interval: Duration) -> Result<Inspection
     let mut sampler = Sampler::new()?;
     let baseline = sampler.sample(Some(options.pid));
     let previous = crate::sampler::collect_process_samples(&baseline.processes);
-    
+
     std::thread::sleep(interval);
-    
+
     let mut snapshot = sampler.sample(Some(options.pid));
     crate::sampler::apply_process_trends(&mut snapshot.processes, &previous);
-    
+
     let process = snapshot
         .processes
         .iter()
@@ -86,6 +87,11 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
     }
 
     let mut out = String::new();
+    let limit = if options.full {
+        usize::MAX
+    } else {
+        options.limit
+    };
     let process = &inspection.process;
     let _ = writeln!(
         out,
@@ -183,7 +189,7 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
     if inspection.sockets.is_empty() {
         let _ = writeln!(out, "  none visible");
     } else {
-        for socket in inspection.sockets.iter().take(options.limit) {
+        for socket in inspection.sockets.iter().take(limit) {
             let remote_or_state = socket
                 .remote
                 .as_deref()
@@ -205,7 +211,7 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
     if inspection.files.is_empty() {
         let _ = writeln!(out, "  none visible");
     } else {
-        for file in inspection.files.iter().take(options.limit) {
+        for file in inspection.files.iter().take(limit) {
             let _ = writeln!(
                 out,
                 "  {:<5} {:<5} {}",
@@ -217,7 +223,6 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
     }
     Ok(out)
 }
-
 
 pub fn collect_handles(pid: u32) -> Result<ProcessHandles> {
     ensure_lsof_available()?;
@@ -234,16 +239,22 @@ pub fn collect_handles(pid: u32) -> Result<ProcessHandles> {
     Ok(ProcessHandles { files, sockets })
 }
 
-fn ensure_lsof_available() -> Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        if Command::new("which").arg("lsof").output().is_err() {
-            return Err(error::message(
-                "lsof is not found in PATH. Please install it or ensure it is available.",
-            ));
-        }
+pub(crate) fn ensure_lsof_available() -> Result<()> {
+    static LSOF_AVAILABLE: OnceLock<bool> = OnceLock::new();
+    let available = *LSOF_AVAILABLE.get_or_init(|| {
+        Command::new("which")
+            .arg("lsof")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    });
+    if available {
+        Ok(())
+    } else {
+        Err(error::message(
+            "lsof was not found in PATH. Install it or add it to PATH (on macOS it ships with the system at /usr/sbin/lsof), then retry.",
+        ))
     }
-    Ok(())
 }
 
 fn is_empty_lsof_result(output: &Output) -> bool {
@@ -251,7 +262,7 @@ fn is_empty_lsof_result(output: &Output) -> bool {
     output.status.code() == Some(1)
 }
 
-fn lsof_failure_message(kind: &str, output: &Output) -> String {
+pub(crate) fn lsof_failure_message(kind: &str, output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr = stderr.trim();
     if stderr.contains("Permission denied") {

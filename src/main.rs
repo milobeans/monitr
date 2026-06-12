@@ -5,9 +5,9 @@ mod filter;
 mod format;
 mod history;
 mod inspect;
-mod process_record;
 mod output;
 mod ports;
+mod process_record;
 mod sampler;
 mod terminal_backend;
 mod ui;
@@ -416,7 +416,12 @@ fn parse_inspect_args(
     Ok(Some(Args {
         interval,
         filter,
-        mode: Mode::Inspect(InspectMode { pid, json, limit, full }),
+        mode: Mode::Inspect(InspectMode {
+            pid,
+            json,
+            limit,
+            full,
+        }),
     }))
 }
 

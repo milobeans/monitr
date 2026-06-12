@@ -290,8 +290,7 @@ fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     app.table_area = area;
 
     let compact = is_compact(app.compact_mode, area.width);
-    let (headers, widths) =
-        table_schema_for_width(app, area.width);
+    let (headers, widths) = table_schema_for_width(app, area.width);
     let header = Row::new(headers.iter().cloned().map(Cell::from).collect::<Vec<_>>())
         .style(
             Style::default()
@@ -481,8 +480,16 @@ fn table_schema_for_fields(
                 sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
                 sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
                 sort_header("User", sort_key == crate::app::SortKey::User, sort_desc),
-                sort_header("Net In", sort_key == crate::app::SortKey::NetworkIn, sort_desc),
-                sort_header("Net Out", sort_key == crate::app::SortKey::NetworkOut, sort_desc),
+                sort_header(
+                    "Net In",
+                    sort_key == crate::app::SortKey::NetworkIn,
+                    sort_desc,
+                ),
+                sort_header(
+                    "Net Out",
+                    sort_key == crate::app::SortKey::NetworkOut,
+                    sort_desc,
+                ),
                 sort_header("% CPU", sort_key == crate::app::SortKey::Cpu, sort_desc),
                 "Status".to_string(),
             ],
@@ -812,8 +819,16 @@ fn compact_table_schema(
             vec![
                 sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
                 sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
-                sort_header("Net In", sort_key == crate::app::SortKey::NetworkIn, sort_desc),
-                sort_header("Net Out", sort_key == crate::app::SortKey::NetworkOut, sort_desc),
+                sort_header(
+                    "Net In",
+                    sort_key == crate::app::SortKey::NetworkIn,
+                    sort_desc,
+                ),
+                sort_header(
+                    "Net Out",
+                    sort_key == crate::app::SortKey::NetworkOut,
+                    sort_desc,
+                ),
                 "State".to_string(),
             ],
             compact_widths(&[6, 0, 9, 9, 8]),
@@ -1408,7 +1423,7 @@ fn render_handles(frame: &mut Frame<'_>, area: Rect, view: &HandlesView) {
         ),
         Span::styled(format!("pid {}", view.pid), Style::default().fg(MUTED)),
     ])];
-    
+
     if view.loading {
         lines.push(Line::from(""));
         lines.push(muted_line("Loading handles..."));
@@ -1821,13 +1836,34 @@ mod tests {
     #[test]
     fn compact_table_columns_keep_primary_sort_targets() {
         assert_eq!(column_sort_key(Tab::Cpu, false, 2, 60), Some(SortKey::Cpu));
-        assert_eq!(column_sort_key(Tab::Memory, false, 2, 60), Some(SortKey::Memory));
-        assert_eq!(column_sort_key(Tab::Energy, false, 2, 60), Some(SortKey::Energy));
-        assert_eq!(column_sort_key(Tab::Disk, false, 2, 60), Some(SortKey::DiskRead));
-        assert_eq!(column_sort_key(Tab::Disk, false, 3, 60), Some(SortKey::DiskWrite));
-        assert_eq!(column_sort_key(Tab::Network, false, 2, 60), Some(SortKey::NetworkIn));
-        assert_eq!(column_sort_key(Tab::Network, false, 3, 60), Some(SortKey::NetworkOut));
-        assert_eq!(column_sort_key(Tab::Movers, false, 2, 60), Some(SortKey::Trend));
+        assert_eq!(
+            column_sort_key(Tab::Memory, false, 2, 60),
+            Some(SortKey::Memory)
+        );
+        assert_eq!(
+            column_sort_key(Tab::Energy, false, 2, 60),
+            Some(SortKey::Energy)
+        );
+        assert_eq!(
+            column_sort_key(Tab::Disk, false, 2, 60),
+            Some(SortKey::DiskRead)
+        );
+        assert_eq!(
+            column_sort_key(Tab::Disk, false, 3, 60),
+            Some(SortKey::DiskWrite)
+        );
+        assert_eq!(
+            column_sort_key(Tab::Network, false, 2, 60),
+            Some(SortKey::NetworkIn)
+        );
+        assert_eq!(
+            column_sort_key(Tab::Network, false, 3, 60),
+            Some(SortKey::NetworkOut)
+        );
+        assert_eq!(
+            column_sort_key(Tab::Movers, false, 2, 60),
+            Some(SortKey::Trend)
+        );
     }
 
     #[test]

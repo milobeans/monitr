@@ -28,7 +28,12 @@ pub fn render_snapshot(snapshot: &Snapshot, options: SnapshotOptions<'_>) -> Res
         ))?);
     }
 
-    Ok(render_snapshot_text(snapshot, options.filter, processes, options.full))
+    Ok(render_snapshot_text(
+        snapshot,
+        options.filter,
+        processes,
+        options.full,
+    ))
 }
 
 fn filtered_processes<'a>(

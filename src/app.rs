@@ -609,7 +609,7 @@ impl App {
         self.pending_handles_pid = Some(pid);
         self.handles = Some(HandlesView {
             pid,
-            name,
+            name: name.clone(),
             files: Vec::new(),
             sockets: Vec::new(),
             error: None,
@@ -619,13 +619,10 @@ impl App {
         std::thread::spawn(move || {
             let result = inspect::collect_handles(pid);
             let error = result.as_ref().err().map(|e| e.to_string());
-            let handles = match result {
-                Ok(h) => h,
-                Err(_) => crate::inspect::ProcessHandles::default(),
-            };
+            let handles = result.unwrap_or_default();
             let _ = tx.send(HandleResult {
                 pid,
-                name: String::new(),
+                name,
                 handles,
                 error,
             });
@@ -776,7 +773,13 @@ impl App {
         }
         let relative_column = column - table_x - 1;
 
-        let widths = ui::column_widths(self.tab, self.sort_key, self.sort_desc, self.compact_mode, self.table_area.width);
+        let widths = ui::column_widths(
+            self.tab,
+            self.sort_key,
+            self.sort_desc,
+            self.compact_mode,
+            self.table_area.width,
+        );
         let mut position = 0;
         for (index, width) in widths.iter().enumerate() {
             if relative_column >= position && relative_column < position + width {
@@ -1091,7 +1094,11 @@ impl App {
         }
     }
 
-    fn cancel_pending_handles_if_selection_changed(&mut self, previous: Option<usize>, current: Option<usize>) {
+    fn cancel_pending_handles_if_selection_changed(
+        &mut self,
+        previous: Option<usize>,
+        current: Option<usize>,
+    ) {
         if previous != current {
             self.pending_handles_pid = None;
             self.handles = None;
