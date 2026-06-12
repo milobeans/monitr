@@ -1464,6 +1464,8 @@ mod tests {
         let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
         app.tab = Tab::Cpu;
         app.compact_mode = false;
+        app.sort_key = SortKey::Cpu;
+        app.sort_desc = true;
         app.table_area = Rect::new(0, 0, 200, 20);
         let header_row = app.table_area.y + 1;
         let memory_column = column_position_for(&app, SortKey::Memory);
@@ -1497,6 +1499,8 @@ mod tests {
         let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
         app.tab = Tab::Cpu;
         app.compact_mode = false;
+        app.sort_key = SortKey::Cpu;
+        app.sort_desc = true;
         app.table_area = Rect::new(0, 0, 200, 20);
         let header_row = app.table_area.y + 1;
         let memory_column = column_position_for(&app, SortKey::Memory);

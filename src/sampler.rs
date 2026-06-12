@@ -11,6 +11,9 @@ use sysinfo::{
 
 use crate::error::{self, Result};
 
+const PROCESS_NETWORK_COMMAND_TIMEOUT: Duration = Duration::from_millis(750);
+const PROCESS_NETWORK_MAX_BACKOFF: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     pub totals: SystemTotals,
@@ -193,6 +196,9 @@ pub struct Sampler {
     last_sample: Instant,
     static_info: StaticInfo,
     previous_process_network_totals: HashMap<u32, ProcessNetworkTotals>,
+    process_network_backoff_until: Option<Instant>,
+    process_network_failure_count: u32,
+    process_network_last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -238,6 +244,9 @@ impl Sampler {
                     .unwrap_or_else(|| std::env::consts::OS.to_string()),
             },
             previous_process_network_totals: HashMap::new(),
+            process_network_backoff_until: None,
+            process_network_failure_count: 0,
+            process_network_last_error: None,
         })
     }
 
@@ -481,10 +490,29 @@ impl Sampler {
         &mut self,
         seconds: f64,
     ) -> (HashMap<u32, ProcessNetworkSample>, bool, Option<String>) {
+        let now = Instant::now();
+        if let Some(backoff_until) = self.process_network_backoff_until
+            && now < backoff_until
+        {
+            let retry_after = backoff_until.saturating_duration_since(now).as_secs_f64();
+            let error = self
+                .process_network_last_error
+                .as_deref()
+                .unwrap_or("previous process-level network attribution failure");
+            return (
+                HashMap::new(),
+                false,
+                Some(format!(
+                    "process-level network attribution unavailable; retrying in {retry_after:.1}s after {error}"
+                )),
+            );
+        }
+
         let totals = match platform::process_network_totals() {
             Ok(totals) => totals,
             Err(error) => {
                 self.previous_process_network_totals.clear();
+                self.record_process_network_failure(error.clone());
                 return (
                     HashMap::new(),
                     false,
@@ -494,6 +522,10 @@ impl Sampler {
                 );
             }
         };
+
+        self.process_network_backoff_until = None;
+        self.process_network_failure_count = 0;
+        self.process_network_last_error = None;
 
         let mut samples = HashMap::with_capacity(totals.len());
         for (pid, totals) in totals {
@@ -523,6 +555,13 @@ impl Sampler {
             .collect();
 
         (samples, true, None)
+    }
+
+    fn record_process_network_failure(&mut self, error: String) {
+        self.process_network_failure_count = self.process_network_failure_count.saturating_add(1);
+        let backoff = process_network_backoff(self.process_network_failure_count);
+        self.process_network_backoff_until = Some(Instant::now() + backoff);
+        self.process_network_last_error = Some(error);
     }
 
     fn disk_rows(&self, seconds: f64) -> (f64, f64, Vec<DiskRow>) {
@@ -573,6 +612,12 @@ impl Sampler {
             .collect();
         (in_rate, out_rate, rows)
     }
+}
+
+fn process_network_backoff(failure_count: u32) -> Duration {
+    let exponent = failure_count.saturating_sub(1).min(5);
+    let seconds = 1_u64 << exponent;
+    Duration::from_secs(seconds).min(PROCESS_NETWORK_MAX_BACKOFF)
 }
 
 pub fn collect_process_samples(processes: &[ProcessRow]) -> HashMap<u32, ProcessSample> {
@@ -679,7 +724,12 @@ fn energy_impact(cpu: f32, memory_percent: f64, io_rate: f64, status: ProcessSta
 }
 
 mod platform {
-    use std::{collections::HashMap, process::Command};
+    use std::{
+        collections::HashMap,
+        process::{Command, Output, Stdio},
+        thread,
+        time::{Duration, Instant},
+    };
 
     #[cfg(target_os = "macos")]
     pub fn thread_count(pid: u32) -> Option<usize> {
@@ -737,10 +787,12 @@ mod platform {
 
     #[cfg(target_os = "macos")]
     pub fn process_network_totals() -> Result<HashMap<u32, super::ProcessNetworkTotals>, String> {
-        let output = Command::new("nettop")
-            .args(["-L1", "-P", "-n", "-x"])
-            .output()
-            .map_err(|error| format!("failed to run nettop: {error}"))?;
+        let output = run_command_with_timeout(
+            "nettop",
+            &["-L1", "-P", "-n", "-x"],
+            super::PROCESS_NETWORK_COMMAND_TIMEOUT,
+        )
+        .map_err(|error| format!("failed to run nettop: {error}"))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -758,6 +810,37 @@ mod platform {
             }
         } else {
             parse_process_network_totals(&output.stdout)
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn run_command_with_timeout(
+        program: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> std::io::Result<Output> {
+        let mut child = Command::new(program)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let deadline = Instant::now() + timeout;
+
+        loop {
+            if child.try_wait()?.is_some() {
+                return child.wait_with_output();
+            }
+
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("command exceeded {}ms timeout", timeout.as_millis()),
+                ));
+            }
+
+            thread::sleep(Duration::from_millis(10));
         }
     }
 
@@ -857,7 +940,11 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessRow, ProcessTrend, apply_process_trends, collect_process_samples};
+    use super::{
+        PROCESS_NETWORK_MAX_BACKOFF, ProcessRow, ProcessTrend, apply_process_trends,
+        collect_process_samples, process_network_backoff,
+    };
+    use std::time::Duration;
 
     #[test]
     fn process_trends_compare_against_previous_sample() {
@@ -902,6 +989,26 @@ mod tests {
 
         let idle = ProcessTrend::default();
         assert_eq!(idle.headline(), None);
+    }
+
+    #[test]
+    fn process_network_backoff_is_exponential_and_bounded() {
+        assert_eq!(process_network_backoff(1), Duration::from_secs(1));
+        assert_eq!(process_network_backoff(2), Duration::from_secs(2));
+        assert_eq!(process_network_backoff(3), Duration::from_secs(4));
+        assert_eq!(process_network_backoff(99), PROCESS_NETWORK_MAX_BACKOFF);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn command_timeout_bounds_slow_process_network_collector() {
+        let result = super::platform::run_command_with_timeout(
+            "sh",
+            &["-c", "sleep 1"],
+            Duration::from_millis(25),
+        );
+
+        assert!(result.is_err_and(|error| error.kind() == std::io::ErrorKind::TimedOut));
     }
 
     fn process(

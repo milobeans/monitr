@@ -603,11 +603,11 @@ fn process_row(process: &ProcessRow, tab: Tab, compact: bool) -> Row<'static> {
     let mem_trend = trend_arrow(process.trend.memory_delta as f64);
     let network_in = process
         .network_in_rate
-        .map(|value| format::bytes_rate(value))
+        .map(format::bytes_rate)
         .unwrap_or_else(|| "-".to_string());
     let network_out = process
         .network_out_rate
-        .map(|value| format::bytes_rate(value))
+        .map(format::bytes_rate)
         .unwrap_or_else(|| "-".to_string());
 
     let cells = if compact {
@@ -731,14 +731,14 @@ fn compact_process_cells(
             Cell::from(right(
                 process
                     .network_in_rate
-                    .map(|value| format::bytes_rate(value))
+                    .map(format::bytes_rate)
                     .unwrap_or_else(|| "-".to_string()),
                 9,
             )),
             Cell::from(right(
                 process
                     .network_out_rate
-                    .map(|value| format::bytes_rate(value))
+                    .map(format::bytes_rate)
                     .unwrap_or_else(|| "-".to_string()),
                 9,
             )),

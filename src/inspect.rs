@@ -132,11 +132,11 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
         "Network In {} | Out {}",
         process
             .network_in_bytes_per_sec
-            .map(|value| format::bytes_rate(value))
+            .map(format::bytes_rate)
             .unwrap_or_else(|| "-".to_string()),
         process
             .network_out_bytes_per_sec
-            .map(|value| format::bytes_rate(value))
+            .map(format::bytes_rate)
             .unwrap_or_else(|| "-".to_string()),
     );
     if process.total_network_read_bytes.is_none() && process.total_network_written_bytes.is_none() {
@@ -150,11 +150,11 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
             "Total Network In {} | Out {}",
             process
                 .total_network_read_bytes
-                .map(|value| format::bytes(value))
+                .map(format::bytes)
                 .unwrap_or_else(|| "-".to_string()),
             process
                 .total_network_written_bytes
-                .map(|value| format::bytes(value))
+                .map(format::bytes)
                 .unwrap_or_else(|| "-".to_string()),
         );
     }
