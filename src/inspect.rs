@@ -83,7 +83,9 @@ pub fn inspect(options: InspectOptions, interval: Duration) -> Result<Inspection
 
 pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String> {
     if options.json {
-        return Ok(serde_json::to_string_pretty(inspection)?);
+        return Ok(serde_json::to_string_pretty(&bounded_inspection(
+            inspection, options,
+        ))?);
     }
 
     let mut out = String::new();
@@ -222,6 +224,18 @@ pub fn render(inspection: &Inspection, options: InspectOptions) -> Result<String
         }
     }
     Ok(out)
+}
+
+fn bounded_inspection(inspection: &Inspection, options: InspectOptions) -> Inspection {
+    let limit = if options.full {
+        usize::MAX
+    } else {
+        options.limit
+    };
+    let mut bounded = inspection.clone();
+    bounded.files.truncate(limit);
+    bounded.sockets.truncate(limit);
+    bounded
 }
 
 pub fn collect_handles(pid: u32) -> Result<ProcessHandles> {
@@ -380,11 +394,14 @@ fn value_or_dash(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_lsof_combined;
+    use serde_json::Value;
+
+    use super::{FileEntry, InspectOptions, Inspection, SocketEntry, bounded_inspection, render};
+    use crate::process_record::ProcessRecord;
 
     #[test]
     fn parses_lsof_combined_entries() {
-        let (files, sockets) = parse_lsof_combined(
+        let (files, sockets) = super::parse_lsof_combined(
             "\
 p34138
 fcwd
@@ -417,5 +434,102 @@ n[::1]:5353->[ff02::fb]:5353
         assert_eq!(sockets[0].protocol, "TCP");
         assert_eq!(sockets[0].state.as_deref(), Some("LISTEN"));
         assert_eq!(sockets[1].remote.as_deref(), Some("[ff02::fb]:5353"));
+    }
+
+    #[test]
+    fn json_render_respects_limit_without_full() {
+        let rendered = render(
+            &sample_inspection(),
+            InspectOptions {
+                pid: 42,
+                json: true,
+                limit: 1,
+                full: false,
+            },
+        )
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(parsed["files"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["sockets"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn full_json_render_ignores_limit() {
+        let bounded = bounded_inspection(
+            &sample_inspection(),
+            InspectOptions {
+                pid: 42,
+                json: true,
+                limit: 1,
+                full: true,
+            },
+        );
+        assert_eq!(bounded.files.len(), 2);
+        assert_eq!(bounded.sockets.len(), 2);
+    }
+
+    fn sample_inspection() -> Inspection {
+        Inspection {
+            process: ProcessRecord {
+                pid: 42,
+                parent_pid: Some(1),
+                name: "demo".to_string(),
+                user: "miloevans".to_string(),
+                command: "demo".to_string(),
+                executable: "/usr/bin/demo".to_string(),
+                cwd: "/tmp".to_string(),
+                status: "running".to_string(),
+                cpu_usage_percent: 1.0,
+                memory_bytes: 2,
+                virtual_memory_bytes: 3,
+                memory_percent: 4.0,
+                disk_read_bytes_per_sec: 5.0,
+                disk_write_bytes_per_sec: 6.0,
+                total_disk_read_bytes: 7,
+                total_disk_written_bytes: 8,
+                network_in_bytes_per_sec: Some(9.0),
+                network_out_bytes_per_sec: Some(10.0),
+                total_network_read_bytes: Some(11),
+                total_network_written_bytes: Some(12),
+                runtime_seconds: 13,
+                start_time_unix: 14,
+                energy_impact: 15.0,
+                thread_count: Some(16),
+                open_files: Some(17),
+                open_files_limit: Some(18),
+                session_id: Some(19),
+                priority: Some(20),
+            },
+            files: vec![
+                FileEntry {
+                    fd: "1".to_string(),
+                    file_type: "REG".to_string(),
+                    device: Some("disk".to_string()),
+                    name: "/tmp/one".to_string(),
+                },
+                FileEntry {
+                    fd: "2".to_string(),
+                    file_type: "REG".to_string(),
+                    device: Some("disk".to_string()),
+                    name: "/tmp/two".to_string(),
+                },
+            ],
+            sockets: vec![
+                SocketEntry {
+                    fd: "3".to_string(),
+                    protocol: "TCP".to_string(),
+                    local: "127.0.0.1:1".to_string(),
+                    remote: Some("127.0.0.1:2".to_string()),
+                    state: Some("ESTABLISHED".to_string()),
+                },
+                SocketEntry {
+                    fd: "4".to_string(),
+                    protocol: "UDP".to_string(),
+                    local: "127.0.0.1:3".to_string(),
+                    remote: None,
+                    state: None,
+                },
+            ],
+        }
     }
 }
