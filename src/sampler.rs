@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::OsStr,
     time::{Duration, Instant},
 };
@@ -391,6 +391,7 @@ impl Sampler {
         }
 
         let sys_pids = pids.iter().copied().map(Pid::from_u32).collect::<Vec<_>>();
+        let rendered_pids = pids.iter().copied().collect::<HashSet<_>>();
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&sys_pids),
             false,
@@ -400,7 +401,7 @@ impl Sampler {
         for process in snapshot
             .processes
             .iter_mut()
-            .filter(|process| pids.contains(&process.pid))
+            .filter(|process| rendered_pids.contains(&process.pid))
         {
             let Some(system_process) = self.system.process(Pid::from_u32(process.pid)) else {
                 continue;
