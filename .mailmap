@@ -1,0 +1,8 @@
+# Canonical contributor identity for this repository.
+# These mappings affect mailmap-aware Git/GitHub views without rewriting commits.
+milobeans <milo.evans567@gmail.com> Claude <noreply@anthropic.com>
+milobeans <milo.evans567@gmail.com> Claude Code <noreply@anthropic.com>
+milobeans <milo.evans567@gmail.com> Claude <claude@anthropic.com>
+milobeans <milo.evans567@gmail.com> Codex <noreply@openai.com>
+milobeans <milo.evans567@gmail.com> OpenAI Codex <noreply@openai.com>
+milobeans <milo.evans567@gmail.com> Codex <codex@openai.com>
