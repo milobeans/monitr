@@ -736,7 +736,13 @@ impl App {
     }
 
     fn handle_mouse_click(&mut self, row: u16, column: u16) -> bool {
-        if self.table_area.height == 0 {
+        if self.table_area.width == 0 || self.table_area.height == 0 {
+            return false;
+        }
+
+        let table_left = self.table_area.x;
+        let table_right = self.table_area.x.saturating_add(self.table_area.width);
+        if column < table_left || column >= table_right {
             return false;
         }
 
@@ -748,10 +754,18 @@ impl App {
         if self.visible.is_empty() {
             return false;
         }
-        let header_offset = 2;
+        let header_offset = 2usize;
         let click_row = row as usize;
         let table_top = self.table_area.y as usize + header_offset;
         if click_row < table_top {
+            return false;
+        }
+        let rendered_body_rows = self
+            .table_area
+            .height
+            .saturating_sub(header_offset as u16 + 1)
+            .min(self.visible.len() as u16) as usize;
+        if click_row >= table_top + rendered_body_rows {
             return false;
         }
         let visible_index = click_row - table_top + self.table_state.offset();
@@ -1516,6 +1530,79 @@ mod tests {
             .unwrap();
         assert_eq!(app.sort_key, SortKey::Pid);
         assert!(app.sort_desc);
+    }
+
+    #[test]
+    fn mouse_click_selects_only_rendered_table_rows() {
+        let mut app = app_with_fake_processes(5);
+        app.table_area = Rect::new(10, 5, 80, 6);
+        app.table_state.select(Some(0));
+
+        assert!(app.handle_mouse_click(app.table_area.y + 4, app.table_area.x + 4));
+        assert_eq!(app.table_state.selected(), Some(2));
+
+        assert!(!app.handle_mouse_click(app.table_area.y + 5, app.table_area.x + 4));
+        assert_eq!(app.table_state.selected(), Some(2));
+    }
+
+    #[test]
+    fn mouse_click_ignores_blank_rows_below_processes() {
+        let mut app = app_with_fake_processes(1);
+        app.table_area = Rect::new(10, 5, 80, 10);
+        app.table_state.select(Some(0));
+
+        assert!(!app.handle_mouse_click(app.table_area.y + 3, app.table_area.x + 4));
+        assert_eq!(app.table_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn mouse_click_ignores_columns_outside_table() {
+        let mut app = app_with_fake_processes(3);
+        app.table_area = Rect::new(10, 5, 80, 8);
+        app.table_state.select(Some(0));
+        let selected = app.table_state.selected();
+
+        assert!(!app.handle_mouse_click(app.table_area.y + 2, app.table_area.x - 1));
+        assert_eq!(app.table_state.selected(), selected);
+
+        assert!(!app.handle_mouse_click(
+            app.table_area.y + 2,
+            app.table_area.x + app.table_area.width
+        ));
+        assert_eq!(app.table_state.selected(), selected);
+    }
+
+    #[test]
+    fn header_click_ignores_columns_outside_table() {
+        let mut app = app_with_fake_processes(3);
+        app.tab = Tab::Cpu;
+        app.compact_mode = false;
+        app.sort_key = SortKey::Cpu;
+        app.sort_desc = true;
+        app.table_area = Rect::new(10, 5, 80, 8);
+        let header_row = app.table_area.y + 1;
+
+        assert!(!app.handle_mouse_click(header_row, app.table_area.x - 1));
+        assert_eq!(app.sort_key, SortKey::Cpu);
+
+        assert!(!app.handle_mouse_click(header_row, app.table_area.x + app.table_area.width));
+        assert_eq!(app.sort_key, SortKey::Cpu);
+    }
+
+    fn app_with_fake_processes(count: u32) -> App {
+        let mut app = App::new(std::time::Duration::from_millis(1_000), None).unwrap();
+        let template = app
+            .snapshot
+            .processes
+            .first()
+            .cloned()
+            .expect("process list should contain the test runner");
+        app.snapshot.processes = (0..count)
+            .map(|index| fake_process(&template, index + 1, &format!("process-{index}")))
+            .collect();
+        app.visible = (0..count as usize).collect();
+        app.table_state.select(Some(0));
+        app
     }
 
     fn fake_process(template: &ProcessRow, pid: u32, name: &str) -> ProcessRow {
