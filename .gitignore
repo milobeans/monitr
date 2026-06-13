@@ -3,3 +3,18 @@
 .DS_Store
 *.swp
 *.swo
+
+# Local-only issue tracking, audits, and planning notes.
+audit.md
+ISSUE.md
+issue.md
+ISSUES.md
+issues.md
+docs/ISSUE.md
+docs/issue.md
+docs/ISSUES.md
+docs/issues.md
+docs/internal/
+plans/
+.internal/
+internal/

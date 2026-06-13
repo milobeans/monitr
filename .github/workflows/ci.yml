@@ -20,6 +20,39 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component clippy --component rustfmt
 
+      - name: Verify internal docs stay private
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+
+          blocked_exact = {
+              "audit.md",
+              "ISSUE.md",
+              "issue.md",
+              "ISSUES.md",
+              "issues.md",
+              "docs/ISSUE.md",
+              "docs/issue.md",
+              "docs/ISSUES.md",
+              "docs/issues.md",
+          }
+          blocked_prefixes = ("docs/internal/", "plans/", ".internal/", "internal/")
+
+          tracked = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+          matches = [
+              path
+              for path in tracked
+              if path in blocked_exact or path.startswith(blocked_prefixes)
+          ]
+
+          if matches:
+              print("::error::Internal tracking or planning docs are tracked by Git:")
+              for path in matches:
+                  print(f"::error::{path}")
+              sys.exit(1)
+          PY
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
@@ -183,7 +216,13 @@ jobs:
               if exc.code != 404:
                   raise
 
-          if published and published_sha and tag_exists and tag_commit != published_sha:
+          if (
+              published
+              and published_sha
+              and tag_exists
+              and tag_commit != published_sha
+              and previous_version != version
+          ):
               print(
                   f"::error::{tag} points to {tag_commit}, but crates.io {version} was "
                   f"published from {published_sha}.",
