@@ -300,9 +300,22 @@ fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         )
         .height(1);
 
+    let view = process_table_view(
+        app.visible.len(),
+        app.table_state.selected(),
+        app.table_state.offset(),
+        process_table_body_capacity(area),
+    );
+    *app.table_state.offset_mut() = view.start;
+    let mut viewport_state = TableState::default()
+        .with_offset(0)
+        .with_selected(view.selected);
+
     let rows = app
         .visible
         .iter()
+        .skip(view.start)
+        .take(view.end.saturating_sub(view.start))
         .filter_map(|index| app.snapshot().processes.get(*index))
         .map(|process| process_row(process, app.tab, compact))
         .collect::<Vec<_>>();
@@ -332,7 +345,7 @@ fn render_process_table(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )
         .column_spacing(1);
-    render_stateful_table(frame, table, area, &mut app.table_state);
+    render_stateful_table(frame, table, area, &mut viewport_state);
 }
 
 fn process_table_title(app: &App) -> String {
@@ -363,6 +376,53 @@ fn render_stateful_table(
     state: &mut TableState,
 ) {
     frame.render_stateful_widget(table, area, state);
+}
+
+fn process_table_body_capacity(area: Rect) -> usize {
+    area.height.saturating_sub(3) as usize
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProcessTableView {
+    start: usize,
+    end: usize,
+    selected: Option<usize>,
+}
+
+fn process_table_view(
+    visible_len: usize,
+    selected: Option<usize>,
+    offset: usize,
+    body_capacity: usize,
+) -> ProcessTableView {
+    if visible_len == 0 || body_capacity == 0 {
+        return ProcessTableView {
+            start: 0,
+            end: 0,
+            selected: None,
+        };
+    }
+
+    let max_start = visible_len.saturating_sub(body_capacity);
+    let mut start = offset.min(max_start);
+    let selected = selected.map(|selected| selected.min(visible_len - 1));
+
+    if let Some(selected) = selected {
+        if selected < start {
+            start = selected;
+        } else if selected >= start + body_capacity {
+            start = selected + 1 - body_capacity;
+        }
+    }
+
+    let end = (start + body_capacity).min(visible_len);
+    let selected = selected.map(|selected| selected.saturating_sub(start));
+
+    ProcessTableView {
+        start,
+        end,
+        selected,
+    }
 }
 
 fn table_schema_for_width(app: &App, area_width: u16) -> (Vec<String>, Vec<Constraint>) {
@@ -1820,7 +1880,10 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::{Tab, build_usage_chart_lines, column_sort_key, column_widths};
+    use super::{
+        ProcessTableView, Tab, build_usage_chart_lines, column_sort_key, column_widths,
+        process_table_view,
+    };
     use crate::app::SortKey;
 
     #[test]
@@ -1890,5 +1953,47 @@ mod tests {
 
         assert!(!rendered.contains('╌'));
         assert!(rendered.contains("75%"));
+    }
+
+    #[test]
+    fn process_table_view_limits_rendered_rows_to_the_viewport() {
+        let view = process_table_view(1_000, Some(500), 480, 12);
+
+        assert_eq!(
+            view,
+            ProcessTableView {
+                start: 489,
+                end: 501,
+                selected: Some(11),
+            }
+        );
+    }
+
+    #[test]
+    fn process_table_view_clamps_offset_without_selection() {
+        let view = process_table_view(5, None, 99, 3);
+
+        assert_eq!(
+            view,
+            ProcessTableView {
+                start: 2,
+                end: 5,
+                selected: None,
+            }
+        );
+    }
+
+    #[test]
+    fn process_table_view_returns_empty_when_no_rows_fit() {
+        let view = process_table_view(10, Some(4), 0, 0);
+
+        assert_eq!(
+            view,
+            ProcessTableView {
+                start: 0,
+                end: 0,
+                selected: None,
+            }
+        );
     }
 }
