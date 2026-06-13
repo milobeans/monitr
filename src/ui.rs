@@ -1283,6 +1283,12 @@ fn append_network_lines(lines: &mut Vec<Line<'static>>, networks: &[NetworkRow])
             Style::default().fg(MUTED),
         )));
     }
+    if networks.len() > 5 {
+        lines.push(Line::from(Span::styled(
+            format!("+{} more interfaces", networks.len() - 5),
+            Style::default().fg(MUTED),
+        )));
+    }
 }
 
 fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {

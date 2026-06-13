@@ -624,7 +624,7 @@ impl Sampler {
     fn network_rows(&self, seconds: f64) -> (f64, f64, Vec<NetworkRow>) {
         let mut in_rate = 0.0;
         let mut out_rate = 0.0;
-        let rows = self
+        let mut rows = self
             .networks
             .iter()
             .map(|(name, data)| {
@@ -640,9 +640,22 @@ impl Sampler {
                     total_transmitted: data.total_transmitted(),
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+        sort_network_rows(&mut rows);
         (in_rate, out_rate, rows)
     }
+}
+
+fn sort_network_rows(rows: &mut [NetworkRow]) {
+    rows.sort_by(|left, right| {
+        network_activity(right)
+            .total_cmp(&network_activity(left))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+}
+
+fn network_activity(row: &NetworkRow) -> f64 {
+    row.received_rate + row.transmitted_rate
 }
 
 fn process_network_backoff(failure_count: u32) -> Duration {
@@ -994,8 +1007,8 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::{
-        PROCESS_NETWORK_MAX_BACKOFF, ProcessRow, ProcessTrend, apply_process_trends,
-        collect_process_samples, process_network_backoff,
+        NetworkRow, PROCESS_NETWORK_MAX_BACKOFF, ProcessRow, ProcessTrend, apply_process_trends,
+        collect_process_samples, process_network_backoff, sort_network_rows,
     };
     use std::time::Duration;
 
@@ -1050,6 +1063,21 @@ mod tests {
         assert_eq!(process_network_backoff(2), Duration::from_secs(2));
         assert_eq!(process_network_backoff(3), Duration::from_secs(4));
         assert_eq!(process_network_backoff(99), PROCESS_NETWORK_MAX_BACKOFF);
+    }
+
+    #[test]
+    fn network_rows_are_sorted_by_current_activity_then_name() {
+        let mut rows = vec![
+            network("utun0", 0.0, 0.0),
+            network("en0", 512.0, 256.0),
+            network("awdl0", 512.0, 256.0),
+            network("bridge0", 64.0, 128.0),
+        ];
+
+        sort_network_rows(&mut rows);
+
+        let ordered = rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(ordered, vec!["awdl0", "en0", "bridge0", "utun0"]);
     }
 
     #[cfg(target_os = "macos")]
@@ -1114,6 +1142,16 @@ mod tests {
             trend: ProcessTrend::default(),
             selected_details: None,
             search_text: String::new(),
+        }
+    }
+
+    fn network(name: &str, received_rate: f64, transmitted_rate: f64) -> NetworkRow {
+        NetworkRow {
+            name: name.to_string(),
+            received_rate,
+            transmitted_rate,
+            total_received: 0,
+            total_transmitted: 0,
         }
     }
 }
