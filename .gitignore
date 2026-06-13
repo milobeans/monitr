@@ -3,3 +3,8 @@
 .DS_Store
 *.swp
 *.swo
+audit.md
+plans/
+internal/
+.internal/
+docs/internal/

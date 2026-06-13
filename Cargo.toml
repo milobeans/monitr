@@ -1,6 +1,6 @@
 [package]
 name = "monitr"
-version = "0.3.46"
+version = "0.3.47"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Milo Evans"]
@@ -9,7 +9,14 @@ repository = "https://github.com/milobeans/monitr"
 license = "MIT"
 keywords = ["macos", "tui", "monitor", "ratatui", "processes"]
 categories = ["command-line-utilities"]
-exclude = [".idea/"]
+exclude = [
+    ".idea/",
+    "audit.md",
+    "plans/",
+    "internal/",
+    ".internal/",
+    "docs/internal/",
+]
 
 [[bin]]
 name = "monitr"
