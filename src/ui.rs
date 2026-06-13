@@ -568,9 +568,9 @@ fn table_schema_for_fields(
                 sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
                 sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
                 sort_header("User", sort_key == crate::app::SortKey::User, sort_desc),
-                sort_header("CPU +/-", sort_key == crate::app::SortKey::Trend, sort_desc),
-                "Mem +/-".to_string(),
-                "Disk +/-".to_string(),
+                sort_header("% CPU", sort_key == crate::app::SortKey::Trend, sort_desc),
+                "Mem".to_string(),
+                "Disk".to_string(),
                 "State".to_string(),
             ],
             vec![
@@ -579,7 +579,7 @@ fn table_schema_for_fields(
                 Constraint::Length(13),
                 Constraint::Length(9),
                 Constraint::Length(10),
-                Constraint::Length(11),
+                Constraint::Length(10),
                 Constraint::Length(10),
             ],
         ),
@@ -732,16 +732,11 @@ fn process_row(process: &ProcessRow, tab: Tab, compact: bool) -> Row<'static> {
                 Cell::from(pid),
                 Cell::from(name),
                 Cell::from(user),
-                Cell::from(right(
-                    format::signed_percent(process.trend.cpu_delta as f64),
-                    8,
-                )),
-                Cell::from(right(format::signed_bytes(process.trend.memory_delta), 9)),
-                Cell::from(right(
-                    format::signed_bytes_rate(process.trend.disk_rate_delta()),
-                    10,
-                )),
-                Cell::from(process.trend.headline().unwrap_or(status)),
+                Cell::from(right(format::percent(process.cpu_usage as f64), 8))
+                    .style(Style::default().fg(usage_color(process.cpu_usage as f64))),
+                Cell::from(right(format::bytes(process.memory), 9)),
+                Cell::from(right(format::bytes_rate(disk_rate), 9)),
+                Cell::from(status),
             ],
         }
     };
@@ -807,17 +802,10 @@ fn compact_process_cells(
         Tab::Movers => vec![
             Cell::from(pid.to_string()),
             Cell::from(name.to_string()),
-            Cell::from(right(
-                format::signed_percent(process.trend.cpu_delta as f64),
-                7,
-            )),
-            Cell::from(right(format::signed_bytes(process.trend.memory_delta), 8)),
-            Cell::from(
-                process
-                    .trend
-                    .headline()
-                    .unwrap_or_else(|| status.to_string()),
-            ),
+            Cell::from(right(format::percent(process.cpu_usage as f64), 7))
+                .style(Style::default().fg(usage_color(process.cpu_usage as f64))),
+            Cell::from(right(format::bytes(process.memory), 8)),
+            Cell::from(status.to_string()),
         ],
     }
 }
@@ -897,8 +885,8 @@ fn compact_table_schema(
             vec![
                 sort_header("PID", sort_key == crate::app::SortKey::Pid, sort_desc),
                 sort_header("Process", sort_key == crate::app::SortKey::Name, sort_desc),
-                sort_header("CPU +/-", sort_key == crate::app::SortKey::Trend, sort_desc),
-                "Mem +/-".to_string(),
+                sort_header("% CPU", sort_key == crate::app::SortKey::Trend, sort_desc),
+                "Mem".to_string(),
                 "State".to_string(),
             ],
             compact_widths(&[6, 0, 8, 9, 10]),
@@ -1446,7 +1434,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         Style::default().fg(TEXT),
     )));
     lines.push(Line::from(Span::styled(
-        "Movers shows CPU, memory, disk, and network changes since the previous sample.",
+        "Movers ranks processes by resource change since the previous sample.",
         Style::default().fg(TEXT),
     )));
     lines.push(Line::from(""));

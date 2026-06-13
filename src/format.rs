@@ -35,39 +35,6 @@ pub fn percent(value: f64) -> String {
     }
 }
 
-pub fn signed_percent(value: f64) -> String {
-    let sign = if value > 0.0 {
-        "+"
-    } else if value < 0.0 {
-        "-"
-    } else {
-        ""
-    };
-    format!("{sign}{}", percent(value.abs()))
-}
-
-pub fn signed_bytes(value: i64) -> String {
-    let sign = if value > 0 {
-        "+"
-    } else if value < 0 {
-        "-"
-    } else {
-        ""
-    };
-    format!("{sign}{}", bytes(value.unsigned_abs()))
-}
-
-pub fn signed_bytes_rate(value: f64) -> String {
-    let sign = if value > 0.0 {
-        "+"
-    } else if value < 0.0 {
-        "-"
-    } else {
-        ""
-    };
-    format!("{sign}{}", bytes_rate(value.abs()))
-}
-
 pub fn number(value: f64) -> String {
     if value >= 100.0 {
         format!("{value:.0}")
@@ -134,9 +101,7 @@ pub fn truncate_middle(value: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        bytes, duration, percent, signed_bytes, signed_percent, sparkline, truncate_middle,
-    };
+    use super::{bytes, duration, percent, sparkline, truncate_middle};
 
     #[test]
     fn formats_bytes() {
@@ -157,14 +122,6 @@ mod tests {
         assert_eq!(percent(3.456), "3.46%");
         assert_eq!(percent(32.11), "32.1%");
         assert_eq!(percent(120.5), "120%");
-    }
-
-    #[test]
-    fn formats_signed_values() {
-        assert_eq!(signed_percent(3.456), "+3.46%");
-        assert_eq!(signed_percent(-32.11), "-32.1%");
-        assert_eq!(signed_bytes(1_500), "+1.50 KB");
-        assert_eq!(signed_bytes(-1_500), "-1.50 KB");
     }
 
     #[test]

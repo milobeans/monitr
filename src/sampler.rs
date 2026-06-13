@@ -110,44 +110,6 @@ impl ProcessTrend {
             + disk_mib.min(100.0)
             + network_mib.min(100.0)
     }
-
-    pub fn headline(&self) -> Option<String> {
-        if self.new_process {
-            return Some("new process".to_string());
-        }
-
-        let cpu_magnitude = self.cpu_delta.abs() as f64;
-        let memory_mib = self.memory_delta.unsigned_abs() as f64 / 1_048_576.0;
-        let disk_mib = self.disk_rate_delta().abs() / 1_048_576.0;
-        let network_mib = self.network_rate_delta().abs() / 1_048_576.0;
-
-        if cpu_magnitude.max(memory_mib).max(disk_mib).max(network_mib) < 0.05 {
-            return None;
-        }
-
-        if cpu_magnitude >= memory_mib && cpu_magnitude >= disk_mib && cpu_magnitude >= network_mib
-        {
-            Some(format!(
-                "CPU {}",
-                crate::format::signed_percent(self.cpu_delta as f64)
-            ))
-        } else if memory_mib >= disk_mib && memory_mib >= network_mib {
-            Some(format!(
-                "mem {}",
-                crate::format::signed_bytes(self.memory_delta)
-            ))
-        } else if network_mib >= disk_mib {
-            Some(format!(
-                "net {}",
-                crate::format::signed_bytes_rate(self.network_rate_delta())
-            ))
-        } else {
-            Some(format!(
-                "disk {}",
-                crate::format::signed_bytes_rate(self.disk_rate_delta())
-            ))
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -1029,32 +991,6 @@ mod tests {
         assert_eq!(current[0].trend.disk_write_rate_delta, -50.0);
         assert!(!current[0].trend.new_process);
         assert!(current[1].trend.new_process);
-    }
-
-    #[test]
-    fn trend_headline_names_the_dominant_driver() {
-        let new_process = ProcessTrend {
-            new_process: true,
-            ..ProcessTrend::default()
-        };
-        assert_eq!(new_process.headline().as_deref(), Some("new process"));
-
-        let cpu_heavy = ProcessTrend {
-            cpu_delta: 35.0,
-            memory_delta: 1_048_576,
-            ..ProcessTrend::default()
-        };
-        assert_eq!(cpu_heavy.headline().as_deref(), Some("CPU +35.0%"));
-
-        let memory_heavy = ProcessTrend {
-            cpu_delta: 1.0,
-            memory_delta: 200_000_000,
-            ..ProcessTrend::default()
-        };
-        assert_eq!(memory_heavy.headline().as_deref(), Some("mem +200 MB"));
-
-        let idle = ProcessTrend::default();
-        assert_eq!(idle.headline(), None);
     }
 
     #[test]
