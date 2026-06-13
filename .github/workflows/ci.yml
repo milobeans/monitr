@@ -216,12 +216,14 @@ jobs:
               if exc.code != 404:
                   raise
 
+          version_changed = previous_version not in ("", version)
+
           if (
               published
               and published_sha
               and tag_exists
               and tag_commit != published_sha
-              and previous_version != version
+              and version_changed
           ):
               print(
                   f"::error::{tag} points to {tag_commit}, but crates.io {version} was "
@@ -234,7 +236,7 @@ jobs:
               published
               and published_sha
               and published_sha != github_sha
-              and previous_version != version
+              and version_changed
           ):
               print(
                   f"::error::monitr {version} is already published on crates.io from "
